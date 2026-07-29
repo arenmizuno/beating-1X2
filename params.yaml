@@ -1,0 +1,208 @@
+# Shared configuration for the soccer value-bet detector.
+#
+# Every tunable in the pipeline lives here so that a run is fully described by
+# this file plus the git commit. src/config.py is the only module that reads it;
+# everything else imports from there.
+
+seed: 42
+
+# ---------------------------------------------------------------------------
+# Scope
+# ---------------------------------------------------------------------------
+# Top-5 European leagues. These are exactly the leagues Understat covers, which
+# is the binding constraint on scope -- xG is not available elsewhere for free.
+#
+# Keys are football-data.co.uk division codes; they are the canonical league IDs
+# used throughout the pipeline.
+leagues:
+  E0:   {name: "Premier League", country: "England", understat: "EPL"}
+  SP1:  {name: "La Liga",        country: "Spain",   understat: "La_liga"}
+  D1:   {name: "Bundesliga",     country: "Germany", understat: "Bundesliga"}
+  I1:   {name: "Serie A",        country: "Italy",   understat: "Serie_A"}
+  F1:   {name: "Ligue 1",        country: "France",  understat: "Ligue_1"}
+
+# Seasons are identified by their STARTING year: 2018 means the 2018-19 season.
+# All three sources are keyed differently (football-data uses "1819", Understat
+# uses 2018); config.py owns the conversion.
+seasons:
+  start: 2018
+  end: 2025          # inclusive -- 2025 is the 2025-26 season
+
+# The final season is held out entirely and is not touched by any training or
+# model-selection step. It is the untouched test set reported in the writeup.
+holdout_season: 2025
+
+split:
+  # Minimum seasons of history before a season is eligible as a validation fold.
+  # With 2, the first walk-forward fold trains on 2018-19 + 2019-20 and
+  # validates on 2020-21.
+  min_train_seasons: 2
+
+# ---------------------------------------------------------------------------
+# Ingestion
+# ---------------------------------------------------------------------------
+ingest:
+  # Seconds to wait between HTTP requests. Understat is scraped rather than
+  # served through an API, so we stay deliberately slow and cache aggressively.
+  request_delay_s: 1.5
+  timeout_s: 30
+  max_retries: 3
+  # If a cached raw file exists, skip the download. Set false to force refresh.
+  use_cache: true
+
+# ---------------------------------------------------------------------------
+# Harmonization
+# ---------------------------------------------------------------------------
+harmonize:
+  # Team names differ across sources ("Man United" vs "Manchester United").
+  # Candidate aliases above this rapidfuzz score are auto-accepted; anything
+  # between review_threshold and this is written to reports/unmatched_teams.csv
+  # for a human to check. Below review_threshold is treated as "no match".
+  auto_accept_score: 92
+  review_threshold: 70
+
+  # Sources occasionally disagree on the calendar date of a match by a day
+  # (timezone handling, late reschedules). Allow this tolerance when joining.
+  date_tolerance_days: 1
+
+  # Fail the stage if any league-season joins below this rate. A silent partial
+  # join is the most dangerous failure mode in this pipeline, so it is loud.
+  min_join_rate: 0.95
+
+# ---------------------------------------------------------------------------
+# Market probabilities
+# ---------------------------------------------------------------------------
+market:
+  # Preference order for closing-odds columns in the football-data CSVs.
+  # Pinnacle closing (PSC) is the sharpest widely-published price and the
+  # standard benchmark; it is present in every season we ingest. The rest are
+  # fallbacks for any season where it is missing. Note the schema drift: AvgC /
+  # MaxC only exist from 2019-20 onward, and BbAv only before it.
+  odds_preference: ["PSC", "AvgC", "PS", "Avg", "BbAv", "B365C", "B365"]
+
+  # Overround removal. "multiplicative" is simple normalization; "shin" is
+  # Shin's method, which distributes the margin less evenly and is generally
+  # better calibrated on longshots. Both are computed and stored; this names
+  # which one downstream stages treat as the primary.
+  primary_devig: "shin"
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+features:
+  # Rolling-form window lengths, in matches. Computed per team over its own
+  # prior fixtures ONLY -- see the shift-then-roll rule in src/features.py.
+  form_windows: [5, 10]
+
+  # Matches at the start of a team's history have no rolling window to draw on.
+  # Require at least this many prior matches or the row is dropped.
+  min_prior_matches: 5
+
+  # Rest days are clipped to this ceiling; a team returning from summer break
+  # is not meaningfully "90 days rested" compared to one at 20.
+  max_rest_days: 21
+
+  # Fraction of the feature table to re-derive from scratch in leakage_check.
+  # This is an expensive O(n) recomputation per sampled row, so keep it small.
+  leakage_check_sample: 250
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+train:
+  # Two tracks. Track A never sees market prices and is the only one that can be
+  # honestly compared against the market. Track B adds the vig-free market
+  # probability as a feature, testing whether our signal adds anything the
+  # market has not already priced in.
+  tracks: ["market_blind", "market_aware"]
+
+  logistic:
+    C: 1.0
+    max_iter: 2000
+
+  lightgbm:
+    n_estimators: 400
+    learning_rate: 0.05
+    num_leaves: 31
+    min_child_samples: 50
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
+
+  # Calibration is fitted on the most recent `calibration_seasons` of the
+  # training window, held out from the fit itself. Never random -- temporal.
+  #
+  # "sigmoid" (Platt scaling), not "isotonic", and this was measured rather than
+  # assumed: with only one season (~1,700 rows) of calibration data, isotonic
+  # regression maps whole score regions to exactly 0.0, and it lost to sigmoid
+  # on every single walk-forward fold for both models. In the worst case it
+  # assigned probability 0 to the outcome that actually occurred in 61 matches,
+  # which alone accounted for more than half of that fold's log loss. Sigmoid is
+  # a 2-parameter fit that cannot produce a degenerate 0 or 1.
+  calibration_method: "sigmoid"
+  calibration_seasons: 1
+
+  # No predicted probability may leave this pipeline at exactly zero. A zero is
+  # a claim of infinite confidence, it makes log loss undefined, and it implies
+  # an unbounded Kelly stake against it. Probabilities are floored here and
+  # renormalized. With sigmoid calibration this should almost never bind -- the
+  # floor-hit rate is logged per fold precisely so that a silent regression back
+  # to degenerate outputs would be visible.
+  probability_floor: 1.0e-4
+
+  mlflow_experiment: "value-bet-detector"
+
+# ---------------------------------------------------------------------------
+# Value-bet flagging and backtest
+# ---------------------------------------------------------------------------
+value:
+  # Flag a fixture when model probability exceeds the vig-free market
+  # probability by this ABSOLUTE margin. This is the rule as originally
+  # specified in the project proposal.
+  edge_threshold: 0.05
+
+  # ...and the relative margin, p_model / p_market - 1, applied on TOP of the
+  # absolute one. Both variants are backtested and reported side by side.
+  #
+  # Two measured findings, recorded here because both are counter-intuitive:
+  #
+  # 1. The absolute rule is heavily longshot-biased. At threshold 0.05 it
+  #    flagged 74-89% of all fixtures at mean odds above 4.7. A fixed 0.05 gap
+  #    means very different things at different prices -- against a market
+  #    probability of 0.20 it is a 25% relative overestimate, against 0.67 only
+  #    7.5% -- and since our model is less sharp than the market it carries more
+  #    mass on longshots nearly everywhere.
+  #
+  # 2. Adding this relative filter does NOT correct that bias; it makes it
+  #    slightly worse (mean odds rose from 5.28 to 5.67). Once a 0.05 absolute
+  #    edge is already required, a longshot at p_market=0.10 clears a 20%
+  #    relative bar automatically, so the relative test only ever bites
+  #    favourites. The filter removes the selections we wanted to keep.
+  #
+  # The deeper point is that no selection rule rescues a model that is less
+  # accurate than the market: the threshold sweep in reports/roi_by_threshold.csv
+  # finds no threshold, in any configuration, whose ROI confidence interval
+  # excludes zero. This parameter is retained for the comparison, not because it
+  # is a fix.
+  relative_threshold: 0.20
+
+  # Fractional Kelly. Full Kelly (1.0) is far too aggressive given model error;
+  # a quarter stake is the usual practical compromise.
+  kelly_fraction: 0.25
+
+  flat_stake: 1.0
+  bootstrap_iterations: 2000
+  bootstrap_ci: 0.95
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+evaluate:
+  # Bins used for expected calibration error and reliability diagrams.
+  calibration_bins: 10
+
+  # Reliability-diagram bins holding fewer matches than this are omitted from
+  # the PLOTS only (they stay in reports/calibration_data.csv). Draws are almost
+  # never priced above ~0.35, so the top draw bins can hold a single match, and
+  # plotting a 1-of-1 bin invites reading pure noise as a calibration failure.
+  min_calibration_bin_n: 30

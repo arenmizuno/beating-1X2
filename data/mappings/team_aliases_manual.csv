@@ -1,0 +1,23 @@
+source,league,raw_name,canonical_name,note
+understat,E0,Manchester United,Man United,abbreviation
+understat,E0,Manchester City,Man City,abbreviation
+understat,E0,Nottingham Forest,Nott'm Forest,apostrophe abbreviation
+understat,E0,Wolverhampton Wanderers,Wolves,common short name
+understat,E0,West Bromwich Albion,West Brom,abbreviation
+understat,SP1,Athletic Club,Ath Bilbao,same club; football-data uses the city
+understat,SP1,Atletico Madrid,Ath Madrid,abbreviation
+understat,I1,SPAL 2013,Spal,corporate suffix dropped
+understat,D1,FC Cologne,FC Koln,English vs German spelling
+understat,D1,Borussia M.Gladbach,M'gladbach,abbreviation
+understat,D1,Eintracht Frankfurt,Ein Frankfurt,abbreviation
+understat,D1,RasenBallsport Leipzig,RB Leipzig,full legal name vs short name
+understat,D1,Hamburger SV,Hamburg,anglicised short name
+understat,F1,Paris Saint Germain,Paris SG,abbreviation
+understat,F1,Saint-Etienne,St Etienne,abbreviation
+clubelo,SP1,Atletico,Ath Madrid,abbreviation
+clubelo,SP1,Mallorca,Mallorca,exact match; pinned to stop a bad 2020 forced pairing
+clubelo,D1,Koeln,FC Koln,umlaut transliteration
+clubelo,D1,Gladbach,M'gladbach,common short name
+clubelo,D1,Fuerth,Greuther Furth,umlaut transliteration
+clubelo,D1,Duesseldorf,Fortuna Dusseldorf,umlaut transliteration
+clubelo,F1,Saint-Etienne,St Etienne,abbreviation
