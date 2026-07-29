@@ -1,4 +1,6 @@
-# ADSP 32021 — Final Project: Soccer Value-Bet Detector
+# beating-1X2 — ADSP 32021 Final Project
+
+**Can an expected-goals model beat football's 1X2 market?**
 
 Multiclass prediction of association-football match outcomes (home win / draw /
 away win) from pre-kickoff features, compared against the betting market's

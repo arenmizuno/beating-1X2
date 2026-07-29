@@ -1,4 +1,4 @@
-# Shared configuration for the soccer value-bet detector.
+# Shared configuration for beating-1X2.
 #
 # Every tunable in the pipeline lives here so that a run is fully described by
 # this file plus the git commit. src/config.py is the only module that reads it;
@@ -150,7 +150,7 @@ train:
   # to degenerate outputs would be visible.
   probability_floor: 1.0e-4
 
-  mlflow_experiment: "value-bet-detector"
+  mlflow_experiment: "beating-1x2"
 
 # ---------------------------------------------------------------------------
 # Value-bet flagging and backtest
