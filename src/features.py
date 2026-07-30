@@ -243,7 +243,10 @@ def leakage_check(wide: pd.DataFrame, long: pd.DataFrame, n_samples: int = LEAKA
     sample_size = min(n_samples, len(candidates))
     sample = candidates.iloc[rng.choice(len(candidates), size=sample_size, replace=False)]
 
-    long_by_team = {team: chunk for team, chunk in long.groupby("team", sort=False)}
+    # NOTE: written as an explicit comprehension on purpose. ruff's C416 wants
+    # dict(...) here, but a pandas GroupBy does not convert that way -- it
+    # raises TypeError rather than yielding {name: group}.
+    long_by_team = {team: chunk for team, chunk in long.groupby("team", sort=False)}  # noqa: C416
 
     for row in sample.itertuples(index=False):
         for side in ("home", "away"):
@@ -278,6 +281,88 @@ def leakage_check(wide: pd.DataFrame, long: pd.DataFrame, n_samples: int = LEAKA
 
 
 # ---------------------------------------------------------------------------
+# Shared feature construction (used by BOTH training and serving)
+# ---------------------------------------------------------------------------
+def build_feature_frame(
+    matches: pd.DataFrame,
+    elo: pd.DataFrame,
+    *,
+    upcoming: pd.DataFrame | None = None,
+    run_leakage_check: bool = True,
+) -> pd.DataFrame:
+    """Build the wide feature table from completed matches, optionally scoring
+    unplayed fixtures with the identical code path.
+
+    When `upcoming` is supplied it is appended to the completed-match history as
+    rows whose outcome columns are missing, the ordinary pipeline runs over the
+    combined frame, and only the appended rows are returned.
+
+    This is the single most important design decision in the serving layer:
+    **inference does not reimplement feature engineering.** Recomputing rolling
+    form and Elo separately for live fixtures is the classic source of
+    training/serving skew, and here it would quietly void the leakage guarantees
+    the whole project rests on.
+
+    Appending is safe precisely because the feature logic is shift-then-roll: it
+    only ever looks backward, so an unplayed fixture draws on prior completed
+    matches and contributes nothing to any earlier row.
+
+    One caveat, handled explicitly: if a team appears in more than one unplayed
+    fixture, the second one's rolling window would reach back through the first
+    -- whose result is unknown -- and yield missing features. Those rows are
+    flagged via `feature_complete` rather than silently imputed into nonsense.
+    """
+    scoring_mode = upcoming is not None and len(upcoming) > 0
+
+    if scoring_mode:
+        history = matches.copy()
+        pending = upcoming.copy()
+        # Outcome columns are unknown for unplayed fixtures. They must be absent
+        # rather than zero-filled, so nothing downstream can mistake them for
+        # observed results.
+        for col in ("fthg", "ftag", "home_xg", "away_xg", "ftr"):
+            pending[col] = np.nan
+        combined = pd.concat([history, pending], ignore_index=True)
+        log.info(
+            "scoring mode: %d completed matches + %d unplayed fixtures",
+            len(history),
+            len(pending),
+        )
+    else:
+        combined = matches
+
+    long = build_long_frame(combined)
+    log.info("long team-match frame: %d rows", len(long))
+
+    long = add_lagged_rolling(long)
+    long = attach_elo(long, elo)
+    log.info("Elo coverage on team-matches: %.2f%%", 100 * long["elo"].notna().mean())
+
+    wide = pivot_to_wide(long, combined)
+
+    if scoring_mode:
+        wide = wide[wide["match_id"].isin(upcoming["match_id"])].copy()
+        feature_cols = [c for c in wide.columns if c.endswith(tuple(f"_r{w}" for w in FORM_WINDOWS))]
+        wide["feature_complete"] = wide[feature_cols + ["home_elo", "away_elo"]].notna().all(axis=1)
+        incomplete = int((~wide["feature_complete"]).sum())
+        if incomplete:
+            log.warning(
+                "%d/%d fixtures have incomplete features (team likely appears in "
+                "more than one unplayed fixture, or lacks top-flight history)",
+                incomplete,
+                len(wide),
+            )
+        log.info("built features for %d unplayed fixtures", len(wide))
+        return wide
+
+    log.info("wide feature table before filtering: %d rows", len(wide))
+    if run_leakage_check:
+        # Verify BEFORE filtering, so the check sees the widest possible sample.
+        leakage_check(wide, long)
+    return wide
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> pd.DataFrame:
@@ -288,20 +373,7 @@ def main() -> pd.DataFrame:
     market = pd.read_parquet(MARKET_PATH)
     log.info("loaded matches=%d elo_rows=%d market=%d", len(matches), len(elo), len(market))
 
-    long = build_long_frame(matches)
-    log.info("long team-match frame: %d rows", len(long))
-
-    long = add_lagged_rolling(long)
-    long = attach_elo(long, elo)
-
-    elo_coverage = long["elo"].notna().mean()
-    log.info("Elo coverage on team-matches: %.2f%%", 100 * elo_coverage)
-
-    wide = pivot_to_wide(long, matches)
-    log.info("wide feature table before filtering: %d rows", len(wide))
-
-    # Verify BEFORE filtering, so the check sees the widest possible sample.
-    leakage_check(wide, long)
+    wide = build_feature_frame(matches, elo)
 
     # --- Filters -----------------------------------------------------------
     enough_history = (wide["home_n_prior_matches"] >= MIN_PRIOR_MATCHES) & (

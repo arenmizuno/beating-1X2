@@ -83,7 +83,7 @@ def discover_clubs() -> dict[str, str]:
             continue
 
         top = df[(df["Country"].isin(COUNTRIES)) & (df["Level"] == 1)]
-        for club, country in zip(top["Club"], top["Country"]):
+        for club, country in zip(top["Club"], top["Country"], strict=True):
             clubs.setdefault(str(club).strip(), country)
         log.info("snapshot %s: %3d top-division clubs (running total %d)", date, len(top), len(clubs))
 

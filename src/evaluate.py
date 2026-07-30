@@ -344,7 +344,7 @@ def plot_calibration(predictions: pd.DataFrame) -> pd.DataFrame:
         all_data.append(combined)
 
         fig, axes = plt.subplots(1, 3, figsize=(13, 4.2), sharex=True, sharey=True)
-        for ax, outcome in zip(axes, OUTCOMES):
+        for ax, outcome in zip(axes, OUTCOMES, strict=True):
             ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.4, label="perfect")
             for source, style in (("model", "o-"), ("market", "s--")):
                 part = combined[(combined["source"] == source) & (combined["outcome"] == outcome)]

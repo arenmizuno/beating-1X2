@@ -55,7 +55,7 @@ def expected_calibration_error(y: np.ndarray, proba: np.ndarray, n_bins: int = 1
 
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     total_gap, n = 0.0, len(y)
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         in_bin = (confidence > lo) & (confidence <= hi)
         if not in_bin.any():
             continue
@@ -77,7 +77,7 @@ def per_class_calibration(
 
     for k, outcome in enumerate(OUTCOMES):
         p_k = proba[:, k]
-        for lo, hi in zip(edges[:-1], edges[1:]):
+        for lo, hi in zip(edges[:-1], edges[1:], strict=True):
             in_bin = (p_k > lo) & (p_k <= hi)
             if not in_bin.any():
                 continue

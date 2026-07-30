@@ -1,0 +1,27 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # The pipeline modules open with long explanatory docstrings and inline
+    # rationale. Wrapping prose at 100 columns is enforced for code, but a URL
+    # or a table line in a comment is not worth breaking.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on expressions that ruff would rather see rewritten; the explicit
+# form reads better in a failure message.
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    # sklearn's cv="prefit" deprecation path is noisy and already handled in
+    # src/train.py; it must not drown out real warnings in CI output.
+    "ignore::FutureWarning",
+    "ignore::DeprecationWarning",
+]

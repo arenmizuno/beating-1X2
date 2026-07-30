@@ -90,7 +90,7 @@ def assign_names(source_names: list[str], canon_names: list[str]) -> list[tuple[
     scores = np.array([[_score(s, c) for c in canon_names] for s in source_names], dtype=float)
     # linear_sum_assignment minimises, so negate to maximise total similarity.
     rows, cols = linear_sum_assignment(-scores)
-    return [(source_names[r], canon_names[c], float(scores[r, c])) for r, c in zip(rows, cols)]
+    return [(source_names[r], canon_names[c], float(scores[r, c])) for r, c in zip(rows, cols, strict=True)]
 
 
 def load_manual_aliases() -> pd.DataFrame:
@@ -270,7 +270,7 @@ def _apply_aliases(
     for col in cols:
         canonical_col = col.replace("_raw", "")
         out[canonical_col] = [
-            lookup.get((league, raw)) for league, raw in zip(out["league"], out[col])
+            lookup.get((league, raw)) for league, raw in zip(out["league"], out[col], strict=True)
         ]
     return out
 

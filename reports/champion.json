@@ -1,0 +1,61 @@
+{
+  "registered_model": "beating-1x2",
+  "version": 1,
+  "alias": "champion",
+  "run_id": "cfb1b78a1c4643cdaac4ea8c27068514",
+  "track": "market_aware",
+  "algorithm": "logistic",
+  "selected_by": "walk_forward_mean_log_loss",
+  "train_seasons": [
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "n_features": 41,
+  "walk_forward": {
+    "wf_log_loss": 0.9943525242313769,
+    "wf_market_log_loss": 0.9692970192828753,
+    "wf_gap": 0.025055504948501617
+  },
+  "holdout": {
+    "model": {
+      "log_loss": 0.9856931766571819,
+      "brier": 0.5865623438795955,
+      "accuracy": 0.5379270411117545,
+      "ece": 0.03139593093486097,
+      "floored_fraction": 0.0
+    },
+    "market": {
+      "log_loss": 0.9783680228797793,
+      "brier": 0.5826872542899714,
+      "accuracy": 0.535031847133758,
+      "ece": 0.023799513780596252
+    }
+  },
+  "all_configurations": {
+    "market_blind/logistic": {
+      "wf_log_loss": 1.0078374795021894,
+      "wf_market_log_loss": 0.9692970192828753,
+      "wf_gap": 0.03854046021931412
+    },
+    "market_blind/lightgbm": {
+      "wf_log_loss": 1.0191352079946052,
+      "wf_market_log_loss": 0.9692970192828753,
+      "wf_gap": 0.04983818871172996
+    },
+    "market_aware/logistic": {
+      "wf_log_loss": 0.9943525242313769,
+      "wf_market_log_loss": 0.9692970192828753,
+      "wf_gap": 0.025055504948501617
+    },
+    "market_aware/lightgbm": {
+      "wf_log_loss": 1.006897052481524,
+      "wf_market_log_loss": 0.9692970192828753,
+      "wf_gap": 0.037600033198648686
+    }
+  }
+}

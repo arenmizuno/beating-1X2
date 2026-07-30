@@ -33,6 +33,17 @@ RAW_UNDERSTAT_DIR = RAW_DIR / "understat"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 MLRUNS_DIR = PROJECT_ROOT / "mlruns"
 
+# ---------------------------------------------------------------------------
+# Model registry
+# ---------------------------------------------------------------------------
+# Serving resolves models:/<REGISTERED_MODEL_NAME>@<CHAMPION_ALIAS>, never a
+# concrete version or algorithm. Swapping the model later is a re-registration,
+# not a code change in the API, dashboard, or drift stage.
+REGISTERED_MODEL_NAME = "beating-1x2"
+CHAMPION_ALIAS = "champion"
+MODEL_ARTIFACT_PATH = "model"
+CHAMPION_PATH = REPORTS_DIR / "champion.json"
+
 # Hand-verified team-name overrides. This is a committed SOURCE INPUT, not a
 # derived artifact: the fuzzy matcher consults it first and never overwrites it.
 # Anything listed here is treated as ground truth.

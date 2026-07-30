@@ -34,12 +34,16 @@ Outputs:
 
 from __future__ import annotations
 
+import json
 import warnings
 
 import mlflow
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
+from mlflow.models import infer_signature
+from mlflow.tracking import MlflowClient
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -48,12 +52,16 @@ from sklearn.preprocessing import StandardScaler
 
 from src import metrics
 from src.config import (
+    CHAMPION_ALIAS,
+    CHAMPION_PATH,
     FEATURES_PATH,
     LEAGUE_CODES,
     MLRUNS_DIR,
+    MODEL_ARTIFACT_PATH,
     OUTCOMES,
     PARAMS,
     PROCESSED_DIR,
+    REGISTERED_MODEL_NAME,
     SEED,
     ensure_dirs,
     get_logger,
@@ -202,8 +210,13 @@ def apply_probability_floor(proba: np.ndarray) -> tuple[np.ndarray, int]:
 
 def run_fold(
     features: pd.DataFrame, split: Split, track: str, model_name: str
-) -> tuple[pd.DataFrame, dict[str, float], dict[str, float]]:
-    """Train one (track, model, fold) and score it against the market."""
+) -> tuple[pd.DataFrame, dict[str, float], dict[str, float], object]:
+    """Train one (track, model, fold) and score it against the market.
+
+    Returns the fitted (calibrated) estimator alongside the metrics so the
+    holdout fold's model -- the one trained on the most data, and therefore the
+    one worth deploying -- can be registered without refitting.
+    """
     cols = feature_columns(features, track)
     train, evaluation = split.apply(features)
 
@@ -258,7 +271,7 @@ def run_fold(
         model_metrics["ece"],
         100 * model_metrics["floored_fraction"],
     )
-    return predictions, model_metrics, market_metrics
+    return predictions, model_metrics, market_metrics, model
 
 
 def main() -> pd.DataFrame:
@@ -274,6 +287,10 @@ def main() -> pd.DataFrame:
     log.info("running %d folds (%d walk-forward + 1 holdout)", len(folds), len(folds) - 1)
 
     all_predictions = []
+    # Keyed by (track, model): walk-forward scores drive champion selection,
+    # holdout run ids point at the persisted model artifact to register.
+    wf_summary: dict[tuple[str, str], dict[str, float]] = {}
+    holdout_runs: dict[tuple[str, str], dict] = {}
 
     for track in TRACKS:
         cols = feature_columns(features, track)
@@ -300,7 +317,7 @@ def main() -> pd.DataFrame:
                 fold_scores, market_scores = [], []
 
                 for split in folds:
-                    predictions, model_metrics, market_metrics = run_fold(
+                    predictions, model_metrics, market_metrics, fitted = run_fold(
                         features, split, track, model_name
                     )
                     all_predictions.append(predictions)
@@ -309,7 +326,7 @@ def main() -> pd.DataFrame:
 
                     is_holdout = split.name.startswith("holdout")
                     prefix = "holdout" if is_holdout else f"fold_{split.eval_seasons[0]}"
-                    with mlflow.start_run(run_name=split.name, nested=True):
+                    with mlflow.start_run(run_name=split.name, nested=True) as fold_run:
                         mlflow.log_params(
                             {
                                 "train_seasons": str(list(split.train_seasons)),
@@ -318,6 +335,43 @@ def main() -> pd.DataFrame:
                         )
                         mlflow.log_metrics({f"model_{k}": v for k, v in model_metrics.items()})
                         mlflow.log_metrics({f"market_{k}": v for k, v in market_metrics.items()})
+
+                        # Persist the holdout model: it is trained on every
+                        # development season, so it is the one that would
+                        # actually be deployed. Earlier folds exist to measure,
+                        # not to serve, and logging all of them would bloat the
+                        # store for no benefit.
+                        if is_holdout:
+                            sample = make_design(features.head(5), cols)
+                            signature = infer_signature(sample, fitted.predict_proba(sample))
+                            mlflow.sklearn.log_model(
+                                fitted,
+                                artifact_path=MODEL_ARTIFACT_PATH,
+                                signature=signature,
+                                input_example=sample,
+                            )
+                            # The serving layer must rebuild the design matrix in
+                            # exactly this column order, so the feature list
+                            # travels WITH the model rather than being re-derived
+                            # from a params file that may have moved on.
+                            mlflow.log_dict(
+                                {
+                                    "track": track,
+                                    "model": model_name,
+                                    "feature_columns": cols,
+                                    "design_columns": list(sample.columns),
+                                    "train_seasons": list(split.train_seasons),
+                                    "probability_floor": PROBABILITY_FLOOR,
+                                },
+                                "model_contract.json",
+                            )
+                            holdout_runs[(track, model_name)] = {
+                                "run_id": fold_run.info.run_id,
+                                "model_metrics": model_metrics,
+                                "market_metrics": market_metrics,
+                                "feature_columns": cols,
+                                "train_seasons": list(split.train_seasons),
+                            }
 
                     mlflow.log_metrics(
                         {f"{prefix}_{k}": v for k, v in model_metrics.items()}
@@ -340,11 +394,90 @@ def main() -> pd.DataFrame:
                     wf_market["log_loss"],
                     wf_model["log_loss"] - wf_market["log_loss"],
                 )
+                wf_summary[(track, model_name)] = {
+                    "wf_log_loss": float(wf_model["log_loss"]),
+                    "wf_market_log_loss": float(wf_market["log_loss"]),
+                    "wf_gap": float(wf_model["log_loss"] - wf_market["log_loss"]),
+                }
 
     predictions = pd.concat(all_predictions, ignore_index=True)
     predictions.to_parquet(PREDICTIONS_PATH, index=False)
     log.info("wrote %s (%d prediction rows)", PREDICTIONS_PATH, len(predictions))
+
+    register_champion(wf_summary, holdout_runs)
     return predictions
+
+
+def register_champion(
+    wf_summary: dict[tuple[str, str], dict[str, float]],
+    holdout_runs: dict[tuple[str, str], dict],
+) -> None:
+    """Promote the best configuration to the MLflow Model Registry.
+
+    Selection is by walk-forward mean log loss -- never by holdout performance,
+    which would turn the untouched test season into a model-selection set and
+    quietly invalidate it.
+
+    The decision is written to reports/champion.json so promotion is auditable
+    rather than implicit: which configuration won, by how much, and how it
+    compares to the market baseline it still loses to.
+    """
+    best_key = min(wf_summary, key=lambda k: wf_summary[k]["wf_log_loss"])
+    track, model_name = best_key
+    run_info = holdout_runs[best_key]
+
+    log.info(
+        "champion: %s/%s (walk-forward log loss %.4f, market %.4f)",
+        track,
+        model_name,
+        wf_summary[best_key]["wf_log_loss"],
+        wf_summary[best_key]["wf_market_log_loss"],
+    )
+
+    client = MlflowClient()
+    model_uri = f"runs:/{run_info['run_id']}/{MODEL_ARTIFACT_PATH}"
+    version = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
+
+    # The registry versions integers; semantic meaning lives in tags and the
+    # alias. Serving resolves models:/<name>@champion, so swapping the model
+    # later is a re-registration, not a code change anywhere downstream.
+    client.set_registered_model_alias(
+        REGISTERED_MODEL_NAME, CHAMPION_ALIAS, version.version
+    )
+    for key, value in {
+        "track": track,
+        "algorithm": model_name,
+        "calibration": CALIBRATION_METHOD,
+        "selected_by": "walk_forward_mean_log_loss",
+        "beats_market": str(wf_summary[best_key]["wf_gap"] < 0),
+    }.items():
+        client.set_model_version_tag(REGISTERED_MODEL_NAME, version.version, key, value)
+
+    champion = {
+        "registered_model": REGISTERED_MODEL_NAME,
+        "version": version.version,
+        "alias": CHAMPION_ALIAS,
+        "run_id": run_info["run_id"],
+        "track": track,
+        "algorithm": model_name,
+        "selected_by": "walk_forward_mean_log_loss",
+        "train_seasons": run_info["train_seasons"],
+        "n_features": len(run_info["feature_columns"]),
+        "walk_forward": wf_summary[best_key],
+        "holdout": {
+            "model": run_info["model_metrics"],
+            "market": run_info["market_metrics"],
+        },
+        "all_configurations": {f"{t}/{m}": v for (t, m), v in wf_summary.items()},
+    }
+    CHAMPION_PATH.write_text(json.dumps(champion, indent=2))
+    log.info(
+        "registered %s v%s as @%s -- see %s",
+        REGISTERED_MODEL_NAME,
+        version.version,
+        CHAMPION_ALIAS,
+        CHAMPION_PATH,
+    )
 
 
 if __name__ == "__main__":

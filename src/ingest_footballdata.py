@@ -107,7 +107,7 @@ def load_season(league: str, season: int) -> pd.DataFrame | None:
     for prefix in ODDS_PREFIXES:
         cols = [f"{prefix}{suffix}" for suffix in ("H", "D", "A")]
         if all(c in df.columns for c in cols):
-            for col, suffix in zip(cols, ("H", "D", "A")):
+            for col, suffix in zip(cols, ("H", "D", "A"), strict=True):
                 out[f"odds_{prefix}_{suffix}"] = pd.to_numeric(df[col], errors="coerce")
             present_prefixes.append(prefix)
 
