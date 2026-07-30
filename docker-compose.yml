@@ -1,0 +1,47 @@
+# Local stack: the prediction API plus the monitoring dashboard.
+#
+#   docker compose up --build
+#     API   -> http://localhost:8000/docs
+#     Dash  -> http://localhost:8501
+#
+# Both mount the host's mlruns/ and data/ rather than baking them in. The model
+# registry and the match history are generated artifacts, often several hundred
+# megabytes, and rebuilding the image every time a model is re-registered would
+# be the wrong workflow: register on the host, restart the container.
+
+services:
+  api:
+    build: .
+    image: beating-1x2-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Read-only: the API resolves models:/beating-1x2@champion but must never
+      # be able to mutate the registry.
+      - ./mlruns:/app/mlruns:ro
+      - ./data:/app/data:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    image: beating-1x2-api
+    command: >
+      sh -c "pip install --no-cache-dir streamlit>=1.35 &&
+             streamlit run dashboard/app.py
+             --server.port=8501 --server.address=0.0.0.0"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./mlruns:/app/mlruns:ro
+      - ./data:/app/data:ro
+      - ./reports:/app/reports:ro
+      - ./dashboard:/app/dashboard:ro
+    environment:
+      # The dashboard talks to the API over the compose network.
+      - API_URL=http://api:8000
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - api
+    restart: unless-stopped

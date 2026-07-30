@@ -1,0 +1,10 @@
+# Orchestration, versioning, and monitoring.
+#
+# Kept separate from requirements.txt so the served container stays small: the
+# API needs the model and its dependencies, not a workflow engine.
+-r requirements.txt
+
+prefect>=3.0,<4.0
+dvc>=3.50,<4.0
+evidently>=0.4,<0.8
+streamlit>=1.35,<2.0

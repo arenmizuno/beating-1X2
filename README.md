@@ -55,7 +55,9 @@ See `reports/summary.md` for the generated detail.
 ```
 .
 ├── params.yaml                  # every tunable; a run = this file + the commit
-├── requirements.txt
+├── dvc.yaml                     # the reproducible stage DAG
+├── flows.py                     # Prefect orchestration
+├── Dockerfile / docker-compose.yml
 ├── src/
 │   ├── config.py                 # paths, constants, params loader
 │   ├── fetch.py                  # cached, throttled HTTP for all sources
@@ -67,15 +69,20 @@ See `reports/summary.md` for the generated detail.
 │   ├── features.py               # stage 4: leakage-safe feature table
 │   ├── splits.py                 # stage 5: walk-forward temporal splits
 │   ├── metrics.py                # scoring rules + calibration diagnostics
-│   ├── train.py                  # stage 6: both tracks, both models, MLflow
-│   └── evaluate.py               # stage 7: statistical + economic evaluation
+│   ├── train.py                  # stage 6: both tracks, both models, registry
+│   ├── evaluate.py               # stage 7: statistical + economic evaluation
+│   ├── drift.py                  # stage 8: feature/target/calibration drift
+│   ├── ingest_fixtures.py        # upcoming fixtures + live pre-match odds
+│   ├── prediction_markets.py     # Kalshi/Polymarket enrichment (best-effort)
+│   ├── predict.py                # shared scoring path (API + batch)
+│   └── api.py                    # FastAPI service
+├── dashboard/app.py             # Streamlit monitoring dashboard
+├── tests/                       # 53 hermetic tests, no network
 ├── data/
 │   ├── mappings/team_aliases_manual.csv   # committed, hand-verified
-│   ├── raw/                      # gitignored; rebuilt by the ingest stages
-│   ├── interim/                  # gitignored
-│   └── processed/                # gitignored
-├── reports/                      # committed outputs
-└── mlruns/                       # gitignored MLflow store
+│   ├── raw/ interim/ processed/  # gitignored; rebuilt by the pipeline
+├── reports/                      # committed outputs, incl. drift/
+└── mlruns/                       # gitignored MLflow store + model registry
 ```
 
 ## Running it
@@ -279,12 +286,153 @@ noise-mining. Every economic figure carries a bootstrap CI.
   already changed shape once during this project (the fixture list moved from an
   inlined `datesData` blob to an AJAX endpoint). It could change again.
 
-## Deferred to phase 2
+## Serving and operations
 
-Prefect orchestration, DVC data versioning, FastAPI + Docker serving, an
-Evidently-backed drift dashboard, GitHub Actions CI, and live Polymarket/Kalshi
-pricing at inference. Note that the MLflow Model Registry versions integers, not
-semver — semantic versions belong in tags alongside stage aliases.
+### The model is swappable by design
+
+Nothing downstream names an algorithm. `src/train.py` registers the best
+configuration — selected by **walk-forward** mean log loss, never by holdout
+performance, which would turn the untouched test season into a selection set —
+to the MLflow Model Registry as `beating-1x2` with a `@champion` alias. A
+`model_contract.json` artifact travels with the model carrying its feature list
+and exact design-matrix column order.
+
+The API, the batch scorer, and the dashboard all resolve
+`models:/beating-1x2@champion`. Replacing the model is a re-registration plus a
+restart; no serving code changes. `reports/champion.json` records which
+configuration won and by how much, so promotion is auditable.
+
+### Training and serving share one feature code path
+
+The obvious way to serve this model is to recompute rolling form and Elo for
+live fixtures — and that is the classic route to training/serving skew, which
+here would silently void the leakage guarantees the project rests on.
+
+Instead, `build_feature_frame(matches, elo, upcoming=...)` **appends** unplayed
+fixtures to the completed-match history, runs the unchanged pipeline, and
+extracts the appended rows. This is safe precisely because the feature logic is
+shift-then-roll: it only ever looks backward. Serving and training are one
+implementation, not two kept in sync by discipline. A test asserts that features
+for a held-out fixture are identical whether it is scored as "upcoming" or
+processed as history.
+
+### Live prices are not closing prices
+
+The backtest benchmarks against Pinnacle *closing* odds — the sharpest and
+hardest line to beat. An unplayed fixture has no close, so live scoring falls
+back to the current price, which is systematically softer. **Live value flags
+will therefore fire more readily than the backtest implies.** Every prediction
+carries the `odds_source` actually used and the API states the benchmark in its
+response.
+
+### Prediction markets are in, and coverage is real
+
+Phase 1 concluded prediction markets could not supply history. That remains
+true. But checking their *live* coverage before writing the integration turned
+up something better than expected: **Kalshi carries full-time 1X2 match series
+for all five of our leagues** — `KXEPLGAME`, `KXLALIGAGAME`, `KXBUNDESLIGAGAME`,
+`KXSERIEAGAME`, `KXLIGUE1GAME`. Polymarket's soccer coverage skews to season-long
+and novelty markets, so it is a secondary source.
+
+The integration is best-effort throughout: short timeouts, every failure
+downgraded to "no price found", and a measured hit rate written to
+`reports/prediction_market_coverage.json` rather than an assumed one.
+
+### Running the service
+
+```bash
+docker compose up --build
+```
+
+API docs at `http://localhost:8000/docs`, dashboard at `http://localhost:8501`.
+Or run them directly:
+
+```bash
+uvicorn src.api:app --reload
+```
+```bash
+streamlit run dashboard/app.py
+```
+
+| endpoint | purpose |
+|---|---|
+| `GET /health` | liveness plus the loaded model version |
+| `GET /model` | champion metadata and feature contract |
+| `POST /predict` | score explicit feature payloads |
+| `POST /predict/matches` | re-score historical matches by id |
+| `GET /predict/upcoming` | fetch fixtures, score, flag value |
+| `GET /metrics` | request counters |
+
+Between late May and mid-August `/predict/upcoming` returns an empty list. That
+is correct: the top-5 leagues are not playing. It is reported as
+`n_fixtures: 0` with an explanatory note, not as an error.
+
+### Orchestration: what DVC does and what Prefect does
+
+A fair criticism of the original proposal was that it named two things that look
+like orchestrators. They do different jobs:
+
+- **DVC** (`dvc.yaml`) is the build system. It declares each stage's inputs and
+  outputs so `dvc repro` rebuilds only what changed — editing a model
+  hyperparameter reruns training and evaluation, but not the hour of ingestion
+  above it. Run `dvc dag` to see the graph.
+- **Prefect** (`flows.py`) is the scheduler and runtime. It handles retries
+  against flaky third-party sources, concurrency, and run observability. The
+  three ingestion tasks run concurrently with retries; everything downstream is
+  sequential.
+
+```bash
+dvc repro
+```
+```bash
+python flows.py            # full pipeline
+```
+```bash
+python flows.py --scoring  # just refresh and score fixtures
+```
+
+### Drift monitoring
+
+`src/drift.py` tracks three things, and computes the statistics directly so the
+dashboard has numbers regardless of Evidently's version; Evidently HTML reports
+are generated additionally.
+
+The reference window is **2018-19 and 2019-20 only** — deliberately stopping
+before 2020-21. A reference window has to predate the shift you want to detect,
+and folding the COVID season into the baseline would make it undetectable by
+construction. With the window set correctly, 2020-21 flags as target drift at
+p < 0.0001: home-win rate fell to 39.8% from 44–45% either side, matches having
+been played in empty stadiums. It is also the worst fold for every model
+configuration. That is a real detected shift, not injected synthetic noise.
+
+Calibration decay is tracked as the **gap to the market**, not raw log loss: a
+season where everyone scored worse was a hard season; a season where only we
+scored worse is model decay.
+
+### Tests and CI
+
+53 hermetic tests, ~2.5s, no network — they run on synthetic frames so an outage
+at any data source can never redden the build.
+
+The leakage tests are the centrepiece, and they are themselves verified by
+mutation: CI changes `shift(1)` to `shift(0)` in the feature code and **fails the
+build if the tests stay green**. A guard that never fires on a broken build is
+worse than no guard.
+
+```bash
+pytest
+```
+```bash
+ruff check .
+```
+
+## Still not done
+
+Hosted deployment (the container runs locally by design), and a scheduled
+Prefect deployment against a Prefect server rather than ad-hoc flow runs.
+
+Note the MLflow Model Registry versions integers, not semver — semantic versions
+live in tags alongside the alias.
 
 ## Responsible use
 

@@ -1,0 +1,147 @@
+# DVC pipeline DAG.
+#
+#   dvc dag     show the stage graph
+#   dvc repro   rebuild only what actually changed
+#
+# DVC is the build system here; Prefect (flows.py) is the scheduler that invokes
+# it and watches the run. Declaring deps and outs explicitly is what lets DVC
+# skip stages whose inputs are untouched -- editing a model hyperparameter in
+# params.yaml reruns train and evaluate, but not the hour of ingestion above it.
+#
+# `params` entries are tracked at key level, so DVC knows which stages a given
+# parameter actually affects.
+
+stages:
+  ingest_footballdata:
+    cmd: python -m src.ingest_footballdata
+    deps:
+      - src/ingest_footballdata.py
+      - src/fetch.py
+      - src/config.py
+    params:
+      - seasons
+      - leagues
+      - ingest
+    outs:
+      - data/interim/footballdata.parquet
+
+  ingest_understat:
+    cmd: python -m src.ingest_understat
+    deps:
+      - src/ingest_understat.py
+      - src/fetch.py
+      - src/config.py
+    params:
+      - seasons
+      - leagues
+      - ingest
+    outs:
+      - data/interim/understat.parquet
+
+  ingest_clubelo:
+    cmd: python -m src.ingest_clubelo
+    deps:
+      - src/ingest_clubelo.py
+      - src/fetch.py
+      - src/config.py
+    params:
+      - seasons
+      - ingest
+    outs:
+      - data/interim/clubelo.parquet
+
+  harmonize:
+    cmd: python -m src.harmonize
+    deps:
+      - src/harmonize.py
+      - data/interim/footballdata.parquet
+      - data/interim/understat.parquet
+      - data/interim/clubelo.parquet
+      # The hand-verified alias table is a source input: editing it must
+      # invalidate the join.
+      - data/mappings/team_aliases_manual.csv
+    params:
+      - harmonize
+    outs:
+      - data/interim/matches.parquet
+      - data/interim/clubelo_canonical.parquet
+      - data/interim/team_aliases_resolved.csv
+
+  market:
+    cmd: python -m src.market
+    deps:
+      - src/market.py
+      - data/interim/matches.parquet
+    params:
+      - market
+    outs:
+      - data/interim/market.parquet
+
+  features:
+    cmd: python -m src.features
+    deps:
+      - src/features.py
+      - data/interim/matches.parquet
+      - data/interim/market.parquet
+      - data/interim/clubelo_canonical.parquet
+    params:
+      - features
+    outs:
+      - data/processed/features.parquet
+
+  train:
+    cmd: python -m src.train
+    deps:
+      - src/train.py
+      - src/splits.py
+      - src/metrics.py
+      - data/processed/features.parquet
+    params:
+      - train
+      - split
+      - holdout_season
+      - seed
+    outs:
+      - data/processed/predictions.parquet
+    metrics:
+      - reports/champion.json:
+          cache: false
+
+  evaluate:
+    cmd: python -m src.evaluate
+    deps:
+      - src/evaluate.py
+      - src/metrics.py
+      - data/processed/predictions.parquet
+    params:
+      - value
+      - evaluate
+    outs:
+      - reports/model_vs_market.csv:
+          cache: false
+      - reports/value_backtest.csv:
+          cache: false
+      - reports/calibration_data.csv:
+          cache: false
+      - reports/roi_by_threshold.csv:
+          cache: false
+      - reports/breakdown_by_league.csv:
+          cache: false
+
+  drift:
+    cmd: python -m src.drift
+    deps:
+      - src/drift.py
+      - data/processed/features.parquet
+      - data/processed/predictions.parquet
+    outs:
+      # The metric files only, not the whole directory: the Evidently HTML that
+      # lands alongside them is 5.6 MB apiece and is gitignored as regenerable.
+      - reports/drift/feature_drift.csv:
+          cache: false
+      - reports/drift/target_drift.csv:
+          cache: false
+      - reports/drift/calibration_decay.csv:
+          cache: false
+      - reports/drift/drift_metrics.json:
+          cache: false

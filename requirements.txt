@@ -9,3 +9,5 @@ rapidfuzz>=3.5,<4.0
 pyarrow>=14.0,<16.0
 matplotlib>=3.7,<4.0
 tabulate>=0.9,<1.0
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0

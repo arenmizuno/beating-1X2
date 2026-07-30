@@ -26,6 +26,12 @@ __pycache__/
 mlruns/
 mlartifacts/
 
+# Evidently HTML reports embed their entire JS runtime -- 5.6 MB each, 34 MB for
+# the set, against 32 KB for the drift metrics that actually matter. The CSV and
+# JSON outputs beside them ARE committed; regenerate the HTML with
+# `python -m src.drift`.
+reports/drift/*.html
+
 # LightGBM / misc run artifacts
 *.log
 lightgbm_model.txt
