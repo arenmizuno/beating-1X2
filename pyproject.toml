@@ -19,6 +19,15 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+
+# Put the repo root on sys.path so `import src` resolves.
+#
+# Without this, `python -m pytest` works (the -m form adds the CWD) but a bare
+# `pytest` does not -- which is exactly how CI invokes it, so the suite passed
+# locally and failed on every push with ModuleNotFoundError. Setting it here
+# makes both invocations behave identically instead of relying on how pytest
+# happened to be started.
+pythonpath = ["."]
 filterwarnings = [
     # sklearn's cv="prefit" deprecation path is noisy and already handled in
     # src/train.py; it must not drown out real warnings in CI output.
