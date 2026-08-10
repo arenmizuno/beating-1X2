@@ -1,0 +1,400 @@
+schema: '2.0'
+stages:
+  ingest_footballdata:
+    cmd: python -m src.ingest_footballdata
+    deps:
+    - path: src/config.py
+      hash: md5
+      md5: 6612a48d025a67c8cf7bc0945ac11b92
+      size: 6143
+    - path: src/fetch.py
+      hash: md5
+      md5: 55b6789b69051205a9c06854ea972e54
+      size: 3327
+    - path: src/ingest_footballdata.py
+      hash: md5
+      md5: e0422a0e738dc3fd1230942d0c16296f
+      size: 5752
+    params:
+      params.yaml:
+        ingest:
+          request_delay_s: 1.5
+          timeout_s: 30
+          max_retries: 3
+          use_cache: true
+        leagues:
+          E0:
+            name: Premier League
+            country: England
+            understat: EPL
+          SP1:
+            name: La Liga
+            country: Spain
+            understat: La_liga
+          D1:
+            name: Bundesliga
+            country: Germany
+            understat: Bundesliga
+          I1:
+            name: Serie A
+            country: Italy
+            understat: Serie_A
+          F1:
+            name: Ligue 1
+            country: France
+            understat: Ligue_1
+        seasons:
+          start: 2018
+          end: 2025
+    outs:
+    - path: data/interim/footballdata.parquet
+      hash: md5
+      md5: 0fb5ef62a7a8d0685dae451c10b1b7d0
+      size: 552973
+  ingest_understat:
+    cmd: python -m src.ingest_understat
+    deps:
+    - path: src/config.py
+      hash: md5
+      md5: 6612a48d025a67c8cf7bc0945ac11b92
+      size: 6143
+    - path: src/fetch.py
+      hash: md5
+      md5: 55b6789b69051205a9c06854ea972e54
+      size: 3327
+    - path: src/ingest_understat.py
+      hash: md5
+      md5: 036c3e05bb58fa4ef3f2afedaf34aa79
+      size: 4303
+    params:
+      params.yaml:
+        ingest:
+          request_delay_s: 1.5
+          timeout_s: 30
+          max_retries: 3
+          use_cache: true
+        leagues:
+          E0:
+            name: Premier League
+            country: England
+            understat: EPL
+          SP1:
+            name: La Liga
+            country: Spain
+            understat: La_liga
+          D1:
+            name: Bundesliga
+            country: Germany
+            understat: Bundesliga
+          I1:
+            name: Serie A
+            country: Italy
+            understat: Serie_A
+          F1:
+            name: Ligue 1
+            country: France
+            understat: Ligue_1
+        seasons:
+          start: 2018
+          end: 2025
+    outs:
+    - path: data/interim/understat.parquet
+      hash: md5
+      md5: 1781591b412627c181683114bd0134dc
+      size: 442712
+  ingest_clubelo:
+    cmd: python -m src.ingest_clubelo
+    deps:
+    - path: src/config.py
+      hash: md5
+      md5: 6612a48d025a67c8cf7bc0945ac11b92
+      size: 6143
+    - path: src/fetch.py
+      hash: md5
+      md5: 55b6789b69051205a9c06854ea972e54
+      size: 3327
+    - path: src/ingest_clubelo.py
+      hash: md5
+      md5: 496ebf02094167abb9c362993ab7bff7
+      size: 5776
+    params:
+      params.yaml:
+        ingest:
+          request_delay_s: 1.5
+          timeout_s: 30
+          max_retries: 3
+          use_cache: true
+        seasons:
+          start: 2018
+          end: 2025
+    outs:
+    - path: data/interim/clubelo.parquet
+      hash: md5
+      md5: dfac0dd37492734ddab678582e7259a5
+      size: 1225815
+  harmonize:
+    cmd: python -m src.harmonize
+    deps:
+    - path: data/interim/clubelo.parquet
+      hash: md5
+      md5: dfac0dd37492734ddab678582e7259a5
+      size: 1225815
+    - path: data/interim/footballdata.parquet
+      hash: md5
+      md5: 0fb5ef62a7a8d0685dae451c10b1b7d0
+      size: 552973
+    - path: data/interim/understat.parquet
+      hash: md5
+      md5: 1781591b412627c181683114bd0134dc
+      size: 442712
+    - path: data/mappings/team_aliases_manual.csv
+      hash: md5
+      md5: a36c6a9526402fa9e5af83d2e5a31591
+      size: 1333
+    - path: src/harmonize.py
+      hash: md5
+      md5: 57d39de7d9282238cdeed1e253109643
+      size: 17314
+    params:
+      params.yaml:
+        harmonize:
+          auto_accept_score: 92
+          review_threshold: 70
+          date_tolerance_days: 1
+          min_join_rate: 0.95
+    outs:
+    - path: data/interim/clubelo_canonical.parquet
+      hash: md5
+      md5: e253873c02de58991438622b436ded58
+      size: 1223713
+    - path: data/interim/matches.parquet
+      hash: md5
+      md5: 33806cf64db363a22821730e961773dc
+      size: 983630
+    - path: data/interim/team_aliases_resolved.csv
+      hash: md5
+      md5: 484cb710ba1a62b7d632fd6cdb8ebd75
+      size: 20880
+  market:
+    cmd: python -m src.market
+    deps:
+    - path: data/interim/matches.parquet
+      hash: md5
+      md5: 33806cf64db363a22821730e961773dc
+      size: 983630
+    - path: src/market.py
+      hash: md5
+      md5: 45efb92e7d61eaa0b885bf1e81241875
+      size: 8134
+    params:
+      params.yaml:
+        market:
+          odds_preference:
+          - PSC
+          - AvgC
+          - PS
+          - Avg
+          - BbAv
+          - B365C
+          - B365
+          primary_devig: shin
+    outs:
+    - path: data/interim/market.parquet
+      hash: md5
+      md5: a2f83cccf659ff1ffc080a4b2b96a4f2
+      size: 1800125
+  features:
+    cmd: python -m src.features
+    deps:
+    - path: data/interim/clubelo_canonical.parquet
+      hash: md5
+      md5: e253873c02de58991438622b436ded58
+      size: 1223713
+    - path: data/interim/market.parquet
+      hash: md5
+      md5: a2f83cccf659ff1ffc080a4b2b96a4f2
+      size: 1800125
+    - path: data/interim/matches.parquet
+      hash: md5
+      md5: 33806cf64db363a22821730e961773dc
+      size: 983630
+    - path: src/features.py
+      hash: md5
+      md5: 0c77c124cf982d949f2ac465a249385f
+      size: 21310
+    params:
+      params.yaml:
+        features:
+          form_windows:
+          - 5
+          - 10
+          min_prior_matches: 5
+          max_rest_days: 21
+          leakage_check_sample: 250
+    outs:
+    - path: data/processed/features.parquet
+      hash: md5
+      md5: 9c9c76486ab3538584fac8c61e7711cc
+      size: 5496944
+  train:
+    cmd: python -m src.train
+    deps:
+    - path: data/processed/features.parquet
+      hash: md5
+      md5: 9c9c76486ab3538584fac8c61e7711cc
+      size: 5496944
+    - path: src/metrics.py
+      hash: md5
+      md5: 1f07c5eb9f0d895cbaabaac9f8082e32
+      size: 3798
+    - path: src/splits.py
+      hash: md5
+      md5: dea34789b2198abb16eb295ec53ddb39
+      size: 6558
+    - path: src/train.py
+      hash: md5
+      md5: 804334202040b285081ce73471e9869d
+      size: 32535
+    params:
+      params.yaml:
+        holdout_season: 2025
+        seed: 42
+        split:
+          min_train_seasons: 2
+        train:
+          tracks:
+          - market_blind
+          - market_aware
+          models:
+          - logistic
+          - lightgbm
+          - lightgbm_tuned
+          - stacking
+          logistic:
+            C: 1.0
+            max_iter: 2000
+          lightgbm:
+            n_estimators: 400
+            learning_rate: 0.05
+            num_leaves: 31
+            min_child_samples: 50
+            subsample: 0.8
+            colsample_bytree: 0.8
+            reg_lambda: 1.0
+          lightgbm_search:
+            n_trials: 25
+            num_leaves:
+            - 15
+            - 63
+            learning_rate:
+            - 0.01
+            - 0.15
+            n_estimators:
+            - 150
+            - 600
+            min_child_samples:
+            - 15
+            - 100
+            subsample:
+            - 0.6
+            - 1.0
+            colsample_bytree:
+            - 0.6
+            - 1.0
+            reg_lambda:
+            - 0.0
+            - 5.0
+          calibration_method: sigmoid
+          calibration_seasons: 1
+          stacking_meta_seasons: 1
+          probability_floor: 0.0001
+          mlflow_experiment: beating-1x2
+    outs:
+    - path: data/processed/predictions.parquet
+      hash: md5
+      md5: ecf89c0dde0a24dbd500d793640cee4f
+      size: 4722565
+    - path: reports/champion.json
+      hash: md5
+      md5: 0a61d5901f60a97d4b1e0384bc1f732c
+      size: 2221
+  evaluate:
+    cmd: python -m src.evaluate
+    deps:
+    - path: data/processed/predictions.parquet
+      hash: md5
+      md5: ecf89c0dde0a24dbd500d793640cee4f
+      size: 4722565
+    - path: src/evaluate.py
+      hash: md5
+      md5: 331057914e99c0476cdd7ae83fd7a3ff
+      size: 20705
+    - path: src/metrics.py
+      hash: md5
+      md5: 1f07c5eb9f0d895cbaabaac9f8082e32
+      size: 3798
+    params:
+      params.yaml:
+        evaluate:
+          calibration_bins: 10
+          min_calibration_bin_n: 30
+        value:
+          edge_threshold: 0.05
+          relative_threshold: 0.2
+          kelly_fraction: 0.25
+          flat_stake: 1.0
+          bootstrap_iterations: 2000
+          bootstrap_ci: 0.95
+    outs:
+    - path: reports/breakdown_by_league.csv
+      hash: md5
+      md5: 45ec11499ee1a68610593161407fb243
+      size: 17939
+    - path: reports/calibration_data.csv
+      hash: md5
+      md5: 178fdbd8edb73ed9fbd4b04bc6983704
+      size: 33330
+    - path: reports/model_vs_market.csv
+      hash: md5
+      md5: 0b099b8a7fb62877c913f0dfecdd8a92
+      size: 14435
+    - path: reports/roi_by_threshold.csv
+      hash: md5
+      md5: 8a045685dcfd5ad65647ebe6f992ee23
+      size: 16359
+    - path: reports/value_backtest.csv
+      hash: md5
+      md5: a90cfb823dc455dd4f047d4e400d08e5
+      size: 9904
+  drift:
+    cmd: python -m src.drift
+    deps:
+    - path: data/processed/features.parquet
+      hash: md5
+      md5: 9c9c76486ab3538584fac8c61e7711cc
+      size: 5496944
+    - path: data/processed/predictions.parquet
+      hash: md5
+      md5: ecf89c0dde0a24dbd500d793640cee4f
+      size: 4722565
+    - path: src/drift.py
+      hash: md5
+      md5: 6eee70457ea31dae3ab2b593c45f91c3
+      size: 11284
+    outs:
+    - path: reports/drift/calibration_decay.csv
+      hash: md5
+      md5: c58510a07166a230a6e002ea967daf6f
+      size: 5250
+    - path: reports/drift/drift_metrics.json
+      hash: md5
+      md5: 0b4c3c867612a883c950b8a8bf5e4cf0
+      size: 1231
+    - path: reports/drift/feature_drift.csv
+      hash: md5
+      md5: 458a5e5eeb400ced822ccd8b77ae6984
+      size: 17067
+    - path: reports/drift/target_drift.csv
+      hash: md5
+      md5: 8892fd1ff78bf621805500bb46f6a7a6
+      size: 1481

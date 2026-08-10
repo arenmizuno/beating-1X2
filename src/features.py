@@ -38,6 +38,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src import dixon_coles
 from src.config import (
     FEATURES_PATH,
     INTERIM_DIR,
@@ -59,6 +60,14 @@ FORM_WINDOWS: list[int] = _F["form_windows"]
 MIN_PRIOR_MATCHES: int = _F["min_prior_matches"]
 MAX_REST_DAYS: int = _F["max_rest_days"]
 LEAKAGE_SAMPLE: int = _F["leakage_check_sample"]
+
+_DC = PARAMS["dixon_coles"]
+DC_XI: float = _DC["xi"]
+DC_L2_PENALTY: float = _DC["l2_penalty"]
+DC_REFIT_EVERY_MATCHES: int = _DC["refit_every_matches"]
+DC_MIN_MATCHES_FOR_FIT: int = _DC["min_matches_for_fit"]
+DC_SCORE_GRID_MAX: int = _DC["score_grid_max"]
+DC_RHO_BOUNDS: tuple[float, float] = tuple(_DC["rho_bounds"])
 
 # Per-match team statistics that get lagged and rolled.
 ROLLING_STATS = ["points", "goals_for", "goals_against", "xg_for", "xg_against"]
@@ -167,11 +176,57 @@ def attach_elo(long: pd.DataFrame, elo: pd.DataFrame) -> pd.DataFrame:
     return merged.sort_values(["team", "date", "match_id"], kind="stable").reset_index(drop=True)
 
 
+def attach_dixon_coles(long: pd.DataFrame, dc_ratings: pd.DataFrame) -> pd.DataFrame:
+    """Look up each team's Dixon-Coles rating in force the day BEFORE the match.
+
+    Same as-of-kickoff pattern as `attach_elo`: `dc_ratings` rows are
+    [from_date, +inf) validity snapshots (see `dixon_coles.walk_forward_ratings`),
+    so this can never pick up a snapshot fit using the very match it is
+    labeling, or any match after it.
+    """
+    left = long.copy()
+    left["_asof_date"] = left["date"] - pd.Timedelta(days=1)
+    left = left.sort_values("_asof_date", kind="stable")
+
+    right = (
+        dc_ratings[["team", "attack", "defense", "home_advantage", "rho", "from_date"]]
+        .rename(
+            columns={
+                "attack": "dc_attack",
+                "defense": "dc_defense",
+                "home_advantage": "dc_home_advantage",
+                "rho": "dc_rho",
+            }
+        )
+        .sort_values("from_date", kind="stable")
+    )
+
+    merged = pd.merge_asof(
+        left,
+        right,
+        left_on="_asof_date",
+        right_on="from_date",
+        by="team",
+        direction="backward",
+    )
+    merged = merged.drop(columns=["_asof_date", "from_date"])
+    return merged.sort_values(["team", "date", "match_id"], kind="stable").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
 # Back to one row per match
 # ---------------------------------------------------------------------------
 def _feature_columns() -> list[str]:
-    cols = ["elo", "rest_days", "n_prior_matches", "n_prior_in_season"]
+    cols = [
+        "elo",
+        "rest_days",
+        "n_prior_matches",
+        "n_prior_in_season",
+        "dc_attack",
+        "dc_defense",
+        "dc_home_advantage",
+        "dc_rho",
+    ]
     for stat in ROLLING_STATS:
         for window in FORM_WINDOWS:
             cols.append(f"{stat}_r{window}")
@@ -215,6 +270,38 @@ def pivot_to_wide(long: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
         wide[f"xg_overperformance_r{window}"] = (
             home_net_goals - home_net_xg
         ) - (away_net_goals - away_net_xg)
+
+    # --- Dixon-Coles differentials and standalone match probabilities -------
+    wide["dc_attack_diff"] = wide["home_dc_attack"] - wide["away_dc_attack"]
+    wide["dc_defense_diff"] = wide["home_dc_defense"] - wide["away_dc_defense"]
+
+    # home_advantage and rho are global-per-fit, not per-team, so both sides of
+    # a match must resolve to the identical snapshot value. A mismatch means
+    # the two as-of lookups landed on different checkpoints -- a real bug.
+    dixon_coles.assert_home_away_consistent(wide, "dc_home_advantage")
+    dixon_coles.assert_home_away_consistent(wide, "dc_rho")
+
+    lambda_home, lambda_away = dixon_coles.expected_goals(
+        wide["home_dc_attack"].to_numpy(),
+        wide["home_dc_defense"].to_numpy(),
+        wide["away_dc_attack"].to_numpy(),
+        wide["away_dc_defense"].to_numpy(),
+        wide["home_dc_home_advantage"].to_numpy(),
+    )
+    wide["dc_lambda_home"] = lambda_home
+    wide["dc_lambda_away"] = lambda_away
+    wide["dc_goal_diff_expected"] = lambda_home - lambda_away
+
+    # dc_p_H/D/A is the Dixon-Coles model's OWN standalone 1X2 probability.
+    # It is reported downstream (evaluate.py) as a third benchmark alongside
+    # market and model, and is deliberately EXCLUDED from the ML feature set
+    # (see feature_columns() in train.py) -- feeding a model its own
+    # comparison benchmark as an input would make "model beats Dixon-Coles"
+    # close to tautological.
+    p_h, p_d, p_a = dixon_coles.match_probabilities(
+        lambda_home, lambda_away, wide["home_dc_rho"].to_numpy(), max_goals=DC_SCORE_GRID_MAX
+    )
+    wide["dc_p_H"], wide["dc_p_D"], wide["dc_p_A"] = p_h, p_d, p_a
 
     wide["target"] = wide["ftr"].map(OUTCOME_TO_IDX)
     return wide
@@ -331,12 +418,26 @@ def build_feature_frame(
     else:
         combined = matches
 
+    dc_ratings = dixon_coles.walk_forward_ratings(
+        combined,
+        refit_every_matches=DC_REFIT_EVERY_MATCHES,
+        min_matches_for_fit=DC_MIN_MATCHES_FOR_FIT,
+        xi=DC_XI,
+        l2_penalty=DC_L2_PENALTY,
+        rho_bounds=DC_RHO_BOUNDS,
+    )
+
     long = build_long_frame(combined)
     log.info("long team-match frame: %d rows", len(long))
 
     long = add_lagged_rolling(long)
     long = attach_elo(long, elo)
     log.info("Elo coverage on team-matches: %.2f%%", 100 * long["elo"].notna().mean())
+
+    long = attach_dixon_coles(long, dc_ratings)
+    log.info(
+        "Dixon-Coles coverage on team-matches: %.2f%%", 100 * long["dc_attack"].notna().mean()
+    )
 
     wide = pivot_to_wide(long, combined)
 
@@ -394,7 +495,9 @@ def main() -> pd.DataFrame:
     feature_cols = [
         c
         for c in wide.columns
-        if c.startswith(("home_", "away_", "elo_", "points_diff", "xg_diff", "goal_diff", "xg_over", "rest_"))
+        if c.startswith(
+            ("home_", "away_", "elo_", "points_diff", "xg_diff", "goal_diff", "xg_over", "rest_", "dc_")
+        )
         and c not in ("home_team", "away_team")
     ]
     missing_rates = wide[feature_cols].isna().mean().sort_values(ascending=False)

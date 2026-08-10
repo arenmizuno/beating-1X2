@@ -17,14 +17,32 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.dixon_coles import walk_forward_ratings
 from src.features import (
     add_lagged_rolling,
+    attach_dixon_coles,
     attach_elo,
     build_feature_frame,
     build_long_frame,
     leakage_check,
     pivot_to_wide,
 )
+
+
+def _build_long(matches: pd.DataFrame, elo: pd.DataFrame) -> pd.DataFrame:
+    """The same attach chain build_feature_frame runs internally, exposed here
+    so tests can probe the intermediate `long` frame directly. Small
+    refit/min-match values keep this fast on the compact synthetic fixture."""
+    long = attach_elo(add_lagged_rolling(build_long_frame(matches)), elo)
+    dc_ratings = walk_forward_ratings(
+        matches,
+        refit_every_matches=20,
+        min_matches_for_fit=20,
+        xi=0.0018,
+        l2_penalty=0.05,
+        rho_bounds=(-0.3, 0.3),
+    )
+    return attach_dixon_coles(long, dc_ratings)
 
 
 def test_rolling_features_use_only_prior_matches(matches, elo):
@@ -34,7 +52,7 @@ def test_rolling_features_use_only_prior_matches(matches, elo):
     date and averages the tail directly, so it is an independent check rather
     than a restatement of the implementation.
     """
-    long = attach_elo(add_lagged_rolling(build_long_frame(matches)), elo)
+    long = _build_long(matches, elo)
     wide = pivot_to_wide(long, matches)
 
     checked = 0
@@ -59,7 +77,7 @@ def test_current_match_result_never_enters_its_own_features(matches, elo):
     A feature that moved would mean the outcome had leaked into the predictors.
     Later matches for those teams SHOULD move -- that is legitimate history.
     """
-    long = attach_elo(add_lagged_rolling(build_long_frame(matches)), elo)
+    long = _build_long(matches, elo)
     baseline = pivot_to_wide(long, matches).set_index("match_id")
 
     target_id = baseline.index[len(baseline) // 2]
@@ -69,7 +87,7 @@ def test_current_match_result_never_enters_its_own_features(matches, elo):
     tampered.loc[mask, ["home_xg", "away_xg"]] = [9.9, 0.1]
     tampered.loc[mask, "ftr"] = "H"
 
-    long2 = attach_elo(add_lagged_rolling(build_long_frame(tampered)), elo)
+    long2 = _build_long(tampered, elo)
     after = pivot_to_wide(long2, tampered).set_index("match_id")
 
     feature_cols = [c for c in baseline.columns if c.endswith(("_r5", "_r10"))]
@@ -100,7 +118,7 @@ def test_leakage_check_rejects_leaky_features(matches, elo):
     exactly the bug that rolling-then-shifting (instead of shifting-then-rolling)
     would introduce, and assert the check catches it.
     """
-    long = attach_elo(add_lagged_rolling(build_long_frame(matches)), elo)
+    long = _build_long(matches, elo)
     wide = pivot_to_wide(long, matches)
 
     # Sanity: the honest frame passes.
@@ -112,6 +130,40 @@ def test_leakage_check_rejects_leaky_features(matches, elo):
 
     with pytest.raises(RuntimeError, match="leakage_check failed"):
         leakage_check(leaky, long, n_samples=50)
+
+
+def test_dc_features_do_not_use_current_match_result(matches, elo):
+    """Same tamper test as test_current_match_result_never_enters_its_own_features,
+    applied to the Dixon-Coles columns: changing one match's score must not move
+    that match's own dc_* feature row, since the rating snapshot it looks up was
+    fit using only strictly earlier matches."""
+    baseline = build_feature_frame(matches, elo, run_leakage_check=False).set_index("match_id")
+
+    target_id = baseline.index[len(baseline) // 2]
+    tampered = matches.copy()
+    mask = tampered["match_id"] == target_id
+    tampered.loc[mask, ["fthg", "ftag"]] = [9, 0]
+    tampered.loc[mask, ["home_xg", "away_xg"]] = [9.9, 0.1]
+    tampered.loc[mask, "ftr"] = "H"
+
+    after = build_feature_frame(tampered, elo, run_leakage_check=False).set_index("match_id")
+
+    dc_cols = [
+        "home_dc_attack",
+        "away_dc_attack",
+        "home_dc_defense",
+        "away_dc_defense",
+        "dc_lambda_home",
+        "dc_lambda_away",
+        "dc_p_H",
+        "dc_p_D",
+        "dc_p_A",
+    ]
+    pd.testing.assert_series_equal(
+        baseline.loc[target_id, dc_cols],
+        after.loc[target_id, dc_cols],
+        check_names=False,
+    )
 
 
 def test_scoring_mode_matches_training_path(matches, elo):

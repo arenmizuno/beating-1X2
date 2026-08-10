@@ -33,6 +33,7 @@ log = get_logger("splits")
 
 MIN_TRAIN_SEASONS: int = PARAMS["split"]["min_train_seasons"]
 CALIBRATION_SEASONS: int = PARAMS["train"]["calibration_seasons"]
+STACKING_META_SEASONS: int = PARAMS["train"]["stacking_meta_seasons"]
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,41 @@ def calibration_split(
         )
     cut = len(seasons) - calibration_seasons
     return tuple(seasons[:cut]), tuple(seasons[cut:])
+
+
+def stacking_split(
+    train_seasons: tuple[int, ...],
+    calibration_seasons: int = CALIBRATION_SEASONS,
+    meta_seasons: int = STACKING_META_SEASONS,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """Split a training window into (fit, calibration, meta) seasons.
+
+    The stacking meta-learner needs a slice the base models' calibrators never
+    touched -- training it on `calibration_seasons` (the same rows
+    `calibration_split` already reserves for calibrating the base models)
+    would double-dip the exact in-sample-confidence problem calibration_split's
+    own docstring warns about one level up. This carves TWO trailing slices
+    instead of one: the middle slice still calibrates the base models exactly
+    as before, and the most recent slice -- which neither the base models nor
+    their calibrators ever see -- trains the meta-learner.
+
+    Returns (fit, calibration, meta), sorted and disjoint. Raises ValueError if
+    the window is too short, exactly like `calibration_split`.
+    """
+    seasons = sorted(train_seasons)
+    reserved = calibration_seasons + meta_seasons
+    if len(seasons) <= reserved:
+        raise ValueError(
+            f"training window {seasons} is too short to reserve "
+            f"{calibration_seasons} calibration + {meta_seasons} meta season(s)"
+        )
+    calib_cut = len(seasons) - reserved
+    meta_cut = len(seasons) - meta_seasons
+    return (
+        tuple(seasons[:calib_cut]),
+        tuple(seasons[calib_cut:meta_cut]),
+        tuple(seasons[meta_cut:]),
+    )
 
 
 def describe(splits: list[Split]) -> str:

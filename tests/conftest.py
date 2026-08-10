@@ -29,12 +29,10 @@ def _round_robin(teams: list[str]) -> list[tuple[str, str]]:
     return [(h, a) for h in teams for a in teams if h != a]
 
 
-@pytest.fixture
-def matches() -> pd.DataFrame:
-    """A synthetic completed-match table with the columns src/features.py needs."""
-    rng = np.random.default_rng(0)
+def _build_matches(seasons: list[int], seed: int = 0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
     rows = []
-    for season in SEASONS:
+    for season in seasons:
         fixtures = _round_robin(TEAMS)
         start = pd.Timestamp(f"{season}-08-10")
         for i, (home, away) in enumerate(fixtures):
@@ -57,6 +55,23 @@ def matches() -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows).sort_values("date", kind="stable").reset_index(drop=True)
+
+
+@pytest.fixture
+def matches() -> pd.DataFrame:
+    """A synthetic completed-match table with the columns src/features.py needs."""
+    return _build_matches(SEASONS)
+
+
+@pytest.fixture
+def matches_four_seasons() -> pd.DataFrame:
+    """Four seasons on top of `matches`'s 2, for train.py tests that need a
+    genuine train/calibrate/meta three-way split (stacking needs 3 training
+    seasons) PLUS a separate eval season left over (2018-2020 train, 2021
+    eval) -- more history than the base 2-season fixture provides on purpose
+    (see `matches`'s own use in test_splits.py, which relies on a 2020 season
+    NOT existing)."""
+    return _build_matches([2018, 2019, 2020, 2021])
 
 
 @pytest.fixture

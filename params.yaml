@@ -107,6 +107,55 @@ features:
   leakage_check_sample: 250
 
 # ---------------------------------------------------------------------------
+# Dixon-Coles goal model
+# ---------------------------------------------------------------------------
+# A second, independent rating source (attack/defense strength fit from goal
+# counts via Poisson MLE) alongside ClubElo. Computed in-house -- unlike Elo,
+# there is no external service publishing this, so it is refit periodically as
+# a leakage-safe time series: each snapshot's `from_date` is the fit's cutoff,
+# and only matches strictly before it are ever used to produce that snapshot.
+#
+# The resulting dc_attack/dc_defense/dc_lambda_* columns are ordinary features
+# for BOTH tracks (they never touch bookmaker prices, so market_blind stays
+# honest). dc_p_H/D/A -- the model's own standalone 1X2 probability -- is
+# reported only as a third benchmark alongside market and model; it is
+# deliberately excluded from the feature set, because feeding a model its own
+# comparison benchmark as an input would make "model beats Dixon-Coles" close
+# to tautological.
+dixon_coles:
+  # Daily exponential time-decay on match weight during fitting (Dixon &
+  # Robinson 1998). Order-of-magnitude literature default, not tuned here --
+  # tuning it against any evaluation season would be a second, quieter form of
+  # the same holdout-leakage this project exists to avoid.
+  xi: 0.0018
+
+  # Ridge shrinkage on attack/defense in log space. This is what gives the
+  # model identifiability (no hard sum-to-zero constraint needed) and shrinks
+  # newly promoted clubs with few matches toward league-average strength,
+  # rather than letting a small sample swing straight to an extreme rating.
+  l2_penalty: 0.05
+
+  # Refit cadence, in matches, per league. Refitting after every single match
+  # (the maximally leakage-faithful choice) is computationally infeasible
+  # across ~14,000 matches; this is the practical compromise -- roughly 1.5
+  # rounds of a 20-team league between refits.
+  refit_every_matches: 30
+
+  # No snapshot is fit with fewer prior matches than this; earlier rows get
+  # NaN dc_* features, handled the same way early-history Elo/rolling-form
+  # rows already are (LightGBM routes NaN natively, logistic's imputer fills
+  # the median).
+  min_matches_for_fit: 40
+
+  # Score grid for summing the bivariate Poisson pmf into 1X2 probabilities.
+  # 10-10 already carries negligible mass for football scorelines.
+  score_grid_max: 10
+
+  # Bounds on the low-score correlation parameter. Keeps the tau correction
+  # from going negative at the (0,0)/(1,1) cells for any fitted lambda.
+  rho_bounds: [-0.3, 0.3]
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 train:
@@ -115,6 +164,13 @@ train:
   # probability as a feature, testing whether our signal adds anything the
   # market has not already priced in.
   tracks: ["market_blind", "market_aware"]
+
+  # Competing algorithms within each track, all selected purely by
+  # walk-forward mean log loss (see register_champion). "lightgbm_tuned" and
+  # "stacking" are additional candidates on top of the original two -- kept as
+  # separate entries rather than replacing "lightgbm", so the fixed-hyperparameter
+  # and tuned/ensembled results stay visible side by side in champion.json.
+  models: ["logistic", "lightgbm", "lightgbm_tuned", "stacking"]
 
   logistic:
     C: 1.0
@@ -129,6 +185,23 @@ train:
     colsample_bytree: 0.8
     reg_lambda: 1.0
 
+  # Random search for "lightgbm_tuned", scored on walk-forward folds ONLY
+  # (never the holdout -- that would turn the untouched test season into a
+  # tuning set, the same contamination register_champion's selection rule
+  # already exists to prevent one level up). No new dependency: a plain
+  # np.random.default_rng(SEED) draw over these ranges, not Optuna -- the
+  # search space here is small enough that a sample-efficient sampler buys
+  # little over a fixed, reproducible random search.
+  lightgbm_search:
+    n_trials: 25
+    num_leaves: [15, 63]
+    learning_rate: [0.01, 0.15]
+    n_estimators: [150, 600]
+    min_child_samples: [15, 100]
+    subsample: [0.6, 1.0]
+    colsample_bytree: [0.6, 1.0]
+    reg_lambda: [0.0, 5.0]
+
   # Calibration is fitted on the most recent `calibration_seasons` of the
   # training window, held out from the fit itself. Never random -- temporal.
   #
@@ -141,6 +214,16 @@ train:
   # a 2-parameter fit that cannot produce a degenerate 0 or 1.
   calibration_method: "sigmoid"
   calibration_seasons: 1
+
+  # The "stacking" meta-learner needs its own held-out slice, distinct from
+  # calibration_seasons -- training it on the same rows used to fit the base
+  # models' sigmoid calibrators would double-dip exactly the in-sample-confidence
+  # problem calibration_seasons exists to avoid one level up. This carves an
+  # additional, more recent season off the training window for the meta-learner
+  # alone; folds without enough seasons for fit + calibration + meta are skipped
+  # for "stacking" (logged, not silently dropped) the same way early rows without
+  # enough match history are already skipped elsewhere.
+  stacking_meta_seasons: 1
 
   # No predicted probability may leave this pipeline at exactly zero. A zero is
   # a claim of infinite confidence, it makes log loss undefined, and it implies

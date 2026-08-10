@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from src.config import HOLDOUT_SEASON
-from src.splits import calibration_split, holdout_split, walk_forward_splits
+from src.splits import calibration_split, holdout_split, stacking_split, walk_forward_splits
 
 
 def test_train_and_eval_never_overlap():
@@ -62,6 +62,29 @@ def test_calibration_split_is_temporal_and_disjoint():
 def test_calibration_rejects_too_short_a_window():
     with pytest.raises(ValueError, match="too short"):
         calibration_split((2018,), calibration_seasons=1)
+
+
+def test_stacking_split_is_temporal_and_disjoint():
+    """The stacking meta-learner's own slice must be disjoint from -- and later
+    than -- both the base-model fit slice AND the calibration slice, the same
+    property test_calibration_split_is_temporal_and_disjoint checks one level
+    up. Only folds with enough training seasons for a three-way split apply;
+    shorter ones are covered by test_stacking_split_rejects_too_short_a_window.
+    """
+    seasons = (2018, 2019, 2020, 2021, 2022)
+    fit, calib, meta = stacking_split(seasons, calibration_seasons=1, meta_seasons=1)
+
+    assert not (set(fit) & set(calib))
+    assert not (set(fit) & set(meta))
+    assert not (set(calib) & set(meta))
+    assert max(fit) < min(calib)
+    assert max(calib) < min(meta)
+    assert set(fit) | set(calib) | set(meta) == set(seasons)
+
+
+def test_stacking_split_rejects_too_short_a_window():
+    with pytest.raises(ValueError, match="too short"):
+        stacking_split((2018, 2019), calibration_seasons=1, meta_seasons=1)
 
 
 def test_split_masks_select_the_right_rows(matches):
