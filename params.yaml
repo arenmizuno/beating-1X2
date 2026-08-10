@@ -166,11 +166,29 @@ train:
   tracks: ["market_blind", "market_aware"]
 
   # Competing algorithms within each track, all selected purely by
-  # walk-forward mean log loss (see register_champion). "lightgbm_tuned" and
-  # "stacking" are additional candidates on top of the original two -- kept as
-  # separate entries rather than replacing "lightgbm", so the fixed-hyperparameter
-  # and tuned/ensembled results stay visible side by side in champion.json.
-  models: ["logistic", "lightgbm", "lightgbm_tuned", "stacking"]
+  # walk-forward mean log loss (see register_champion). The `*_tuned` entries
+  # are the same algorithm with hyperparameters chosen by a walk-forward-only
+  # random search; they are kept as SEPARATE entries rather than replacing the
+  # fixed-hyperparameter ones, so the fixed-vs-tuned contrast stays visible in
+  # champion.json. "mlp" is a neural net (sklearn multilayer perceptron), and
+  # "stacking" is a meta-learner over the base models in stacking_base_models.
+  models:
+    [
+      "logistic",
+      "lightgbm",
+      "lightgbm_tuned",
+      "xgboost",
+      "xgboost_tuned",
+      "catboost",
+      "catboost_tuned",
+      "mlp",
+      "stacking",
+    ]
+
+  # The base learners the "stacking" meta-learner combines. Each is fitted and
+  # calibrated exactly as a standalone candidate, then a logistic meta-learner
+  # is trained on their concatenated probabilities over a disjoint slice.
+  stacking_base_models: ["logistic", "lightgbm", "xgboost", "catboost"]
 
   logistic:
     C: 1.0
@@ -184,6 +202,35 @@ train:
     subsample: 0.8
     colsample_bytree: 0.8
     reg_lambda: 1.0
+
+  # XGBoost. Like LightGBM it routes NaN natively and is scale-invariant, so it
+  # takes the raw design matrix (no imputation/scaling).
+  xgboost:
+    n_estimators: 400
+    learning_rate: 0.05
+    max_depth: 4
+    min_child_weight: 5
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
+
+  # CatBoost. bootstrap_type is pinned to Bernoulli in code (not here) because
+  # the default Bayesian bootstrap rejects the `subsample` parameter tuned below.
+  catboost:
+    iterations: 400
+    learning_rate: 0.05
+    depth: 4
+    l2_leaf_reg: 3.0
+    subsample: 0.8
+
+  # Neural net (multilayer perceptron). Same preprocessing as logistic --
+  # imputation + scaling -- since a dense net cannot take NaN and is highly
+  # sensitive to feature scale. early_stopping is enabled in code.
+  mlp:
+    hidden_layer_sizes: [64, 32]
+    alpha: 1.0e-3
+    learning_rate_init: 1.0e-3
+    max_iter: 500
 
   # Random search for "lightgbm_tuned", scored on walk-forward folds ONLY
   # (never the holdout -- that would turn the untouched test season into a
@@ -201,6 +248,27 @@ train:
     subsample: [0.6, 1.0]
     colsample_bytree: [0.6, 1.0]
     reg_lambda: [0.0, 5.0]
+
+  # Same walk-forward-only random search, one space per tunable algorithm. Each
+  # is a {param: [lo, hi]} map plus n_trials; integer-valued params are listed
+  # in train._INTEGER_HYPERPARAMS and sampled as inclusive integers.
+  xgboost_search:
+    n_trials: 25
+    max_depth: [2, 8]
+    learning_rate: [0.01, 0.15]
+    n_estimators: [150, 600]
+    min_child_weight: [1, 20]
+    subsample: [0.6, 1.0]
+    colsample_bytree: [0.6, 1.0]
+    reg_lambda: [0.0, 5.0]
+
+  catboost_search:
+    n_trials: 25
+    depth: [2, 8]
+    learning_rate: [0.01, 0.15]
+    iterations: [150, 600]
+    l2_leaf_reg: [1.0, 10.0]
+    subsample: [0.6, 1.0]
 
   # Calibration is fitted on the most recent `calibration_seasons` of the
   # training window, held out from the fit itself. Never random -- temporal.

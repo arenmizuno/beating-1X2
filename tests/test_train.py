@@ -20,8 +20,10 @@ from src.features import build_feature_frame
 from src.splits import Split
 from src.train import (
     StackingEnsemble,
+    build_model,
     run_fold_stacking,
     tune_lightgbm,
+    tune_model,
 )
 
 SEARCH_SPACE = {
@@ -32,6 +34,24 @@ SEARCH_SPACE = {
     "subsample": (0.8, 1.0),
     "colsample_bytree": (0.8, 1.0),
     "reg_lambda": (0.0, 1.0),
+}
+
+# Small per-algorithm spaces so the multi-algorithm search fits in milliseconds.
+XGBOOST_SEARCH = {
+    "max_depth": (2, 4),
+    "learning_rate": (0.05, 0.15),
+    "n_estimators": (20, 40),
+    "min_child_weight": (1, 5),
+    "subsample": (0.8, 1.0),
+    "colsample_bytree": (0.8, 1.0),
+    "reg_lambda": (0.0, 1.0),
+}
+CATBOOST_SEARCH = {
+    "depth": (2, 4),
+    "learning_rate": (0.05, 0.15),
+    "iterations": (20, 40),
+    "l2_leaf_reg": (1.0, 5.0),
+    "subsample": (0.8, 1.0),
 }
 
 
@@ -78,6 +98,56 @@ def test_tune_lightgbm_refuses_a_holdout_fold(features_frame):
     holdout_fold = Split(name="holdout_2020", train_seasons=(2018, 2019), eval_seasons=(2020,))
     with pytest.raises(ValueError, match="holdout"):
         tune_lightgbm(features_frame, "market_blind", [holdout_fold], n_trials=1, search_space=SEARCH_SPACE)
+
+
+@pytest.mark.parametrize(
+    "algorithm,search_space,int_keys",
+    [
+        ("xgboost", XGBOOST_SEARCH, ("max_depth", "n_estimators", "min_child_weight")),
+        ("catboost", CATBOOST_SEARCH, ("depth", "iterations")),
+    ],
+)
+def test_tune_model_searches_each_algorithm(features_frame, algorithm, search_space, int_keys):
+    """The generic search drives xgboost and catboost the same way it drives
+    lightgbm: best_params covers exactly the space, and integer-ranged
+    hyperparameters come back as ints (not numpy floats that would break the
+    estimator constructor)."""
+    wf_fold = Split(name="wf_2020", train_seasons=(2018, 2019), eval_seasons=(2020,))
+    best_params, trials = tune_model(
+        features_frame, "market_blind", [wf_fold], algorithm, n_trials=2, search_space=search_space
+    )
+    assert set(best_params) == set(search_space)
+    assert len(trials) == 2
+    assert trials["mean_wf_log_loss"].notna().all()
+    for key in int_keys:
+        assert isinstance(best_params[key], int)
+
+
+def test_tune_model_refuses_a_holdout_fold(features_frame):
+    holdout_fold = Split(name="holdout_2020", train_seasons=(2018, 2019), eval_seasons=(2020,))
+    with pytest.raises(ValueError, match="holdout"):
+        tune_model(
+            features_frame, "market_blind", [holdout_fold], "xgboost", n_trials=1, search_space=XGBOOST_SEARCH
+        )
+
+
+@pytest.mark.parametrize("name", ["logistic", "lightgbm", "xgboost", "catboost", "mlp"])
+def test_build_model_emits_three_class_probabilities(features_frame, name):
+    """Every model family build_model knows must fit and return a normalized
+    3-way probability -- the one interface the fold logic, calibration, stacking
+    and serving all depend on."""
+    from src.train import feature_columns, make_design
+
+    cols = feature_columns(features_frame, "market_blind")
+    X = make_design(features_frame, cols)
+    y = features_frame["target"].to_numpy()
+
+    model = build_model(name)
+    model.fit(X, y)
+    proba = model.predict_proba(X)
+
+    assert proba.shape == (len(features_frame), 3)
+    assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-6)
 
 
 def test_stacking_ensemble_predict_proba_shape_and_sums_to_one():

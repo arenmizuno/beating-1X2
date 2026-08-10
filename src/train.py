@@ -11,7 +11,7 @@ Two tracks, and the contrast between them is the actual research question:
                  finding, and the more likely one. If it beats the market alone,
                  the features carry residual information.
 
-Four competing configurations per track (`train.models` in params.yaml):
+The competing configurations per track live in `train.models` (params.yaml):
 
   logistic         Multinomial logistic regression. Not a throwaway baseline --
                    on football outcome data a well-specified linear model on
@@ -19,27 +19,33 @@ Four competing configurations per track (`train.models` in params.yaml):
                    boosting, and it is naturally well calibrated.
 
   lightgbm         Gradient boosting, for any non-linearity the linear model
-                   misses. Fixed hyperparameters from params.yaml.
+  xgboost          misses. Three independent gradient-boosting implementations,
+  catboost         each with fixed hyperparameters from params.yaml, so their
+                   inductive biases can be compared head to head.
 
-  lightgbm_tuned   Same algorithm, hyperparameters chosen by a random search
-                   scored on walk-forward folds ONLY (see `tune_lightgbm`) --
-                   never the holdout, which would turn the untouched test
-                   season into a tuning set. Kept as a separate configuration
-                   from "lightgbm" rather than replacing it, so the
-                   fixed-vs-tuned comparison stays visible in champion.json.
+  *_tuned          The same algorithm with hyperparameters chosen by a random
+                   search scored on walk-forward folds ONLY (see `tune_model`)
+                   -- never the holdout, which would turn the untouched test
+                   season into a tuning set. Each tuned entry is kept SEPARATE
+                   from its fixed counterpart so the fixed-vs-tuned comparison
+                   stays visible in champion.json.
 
-  stacking         A meta-learner over calibrated logistic + calibrated
-                   lightgbm (see `run_fold_stacking`), trained on a THIRD
-                   temporal slice of the training window that neither base
-                   model nor its calibrator ever sees.
+  mlp              A neural net (sklearn multilayer perceptron), imputed and
+                   scaled like logistic since a dense net tolerates neither NaN
+                   nor unscaled features.
 
-All four are selected purely by `register_champion`'s existing rule (walk-forward
-mean log loss, never holdout) -- a larger candidate pool changes nothing about
-how the winner is chosen.
+  stacking         A meta-learner over the calibrated base models named in
+                   `train.stacking_base_models` (see `run_fold_stacking`),
+                   trained on a THIRD temporal slice of the training window that
+                   neither base model nor its calibrator ever sees.
 
-logistic and lightgbm get identical treatment: fitted on the same seasons, then
-calibrated on the same held-out later season. Calibrating an already-calibrated
-model is harmless, and equal treatment keeps the comparison clean.
+Every configuration is selected purely by `register_champion`'s existing rule
+(walk-forward mean log loss, never holdout) -- a larger candidate pool changes
+nothing about how the winner is chosen.
+
+All models get identical treatment: fitted on the same seasons, then calibrated
+on the same held-out later season. Calibrating an already-calibrated model is
+harmless, and equal treatment keeps the comparison clean.
 
 Every fold also scores the market on exactly the same rows, so the benchmark is
 never computed over a different subset than the model it is being compared to.
@@ -58,14 +64,17 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier
 from lightgbm import LGBMClassifier
 from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
 
 from src import metrics
 from src.config import (
@@ -96,7 +105,7 @@ MODELS: list[str] = _T["models"]
 CALIBRATION_METHOD: str = _T["calibration_method"]
 PROBABILITY_FLOOR: float = _T["probability_floor"]
 EXPERIMENT_NAME: str = _T["mlflow_experiment"]
-LIGHTGBM_SEARCH: dict = _T["lightgbm_search"]
+STACKING_BASE_MODELS: list[str] = _T["stacking_base_models"]
 N_BINS: int = PARAMS["evaluate"]["calibration_bins"]
 
 MARKET_FEATURES = [f"p_market_{o}" for o in OUTCOMES]
@@ -159,13 +168,22 @@ def make_design(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return X
 
 
-def build_model(name: str, overrides: dict | None = None) -> Pipeline | LGBMClassifier:
-    """`overrides` replaces params.yaml's fixed lightgbm hyperparameters --
-    used by `tune_lightgbm` to score a trial without mutating global config.
+def build_model(name: str, overrides: dict | None = None):
+    """Construct an unfitted estimator by name.
+
+    `overrides` replaces the fixed params.yaml hyperparameters for that
+    algorithm -- used by `tune_model` to score a search trial without mutating
+    global config. Every estimator exposes the sklearn predict_proba interface,
+    which is all the fold logic, calibration, stacking and serving require.
+
+    Preprocessing differs by family. logistic and the neural net are wrapped in
+    an impute+scale pipeline: neither tolerates NaN, and both are sensitive to
+    feature scale (Elo ~1500, rest days ~7). The gradient-boosting ensembles
+    route NaN down their own branch and are scale-invariant, so they take the
+    raw design matrix -- a median fill for "team has no xG history yet" would
+    throw away information the tree can use.
     """
     if name == "logistic":
-        # Impute and scale: logistic regression cannot take NaN, and the
-        # features are on wildly different scales (Elo ~1500, rest days ~7).
         return Pipeline(
             [
                 ("impute", SimpleImputer(strategy="median")),
@@ -180,9 +198,27 @@ def build_model(name: str, overrides: dict | None = None) -> Pipeline | LGBMClas
                 ),
             ]
         )
+    if name == "mlp":
+        params = dict(_T["mlp"])
+        if overrides:
+            params.update(overrides)
+        hidden = tuple(params.pop("hidden_layer_sizes"))
+        return Pipeline(
+            [
+                ("impute", SimpleImputer(strategy="median")),
+                ("scale", StandardScaler()),
+                (
+                    "clf",
+                    MLPClassifier(
+                        hidden_layer_sizes=hidden,
+                        early_stopping=True,
+                        random_state=SEED,
+                        **params,
+                    ),
+                ),
+            ]
+        )
     if name == "lightgbm":
-        # No imputation: LightGBM routes NaN down its own branch, which is more
-        # informative than a median fill for "team has no xG history yet".
         params = dict(_T["lightgbm"])
         if overrides:
             params.update(overrides)
@@ -191,6 +227,34 @@ def build_model(name: str, overrides: dict | None = None) -> Pipeline | LGBMClas
             num_class=3,
             random_state=SEED,
             verbose=-1,
+            **params,
+        )
+    if name == "xgboost":
+        # num_class is set automatically by the sklearn wrapper from the label
+        # count; passing it explicitly raises, so only the objective is named.
+        params = dict(_T["xgboost"])
+        if overrides:
+            params.update(overrides)
+        return XGBClassifier(
+            objective="multi:softprob",
+            random_state=SEED,
+            verbosity=0,
+            **params,
+        )
+    if name == "catboost":
+        # bootstrap_type is pinned to Bernoulli (not exposed to the search)
+        # because CatBoost's default Bayesian bootstrap rejects the `subsample`
+        # parameter both the fixed config and the search set. allow_writing_files
+        # is off so fitting does not litter a catboost_info/ directory.
+        params = dict(_T["catboost"])
+        if overrides:
+            params.update(overrides)
+        return CatBoostClassifier(
+            loss_function="MultiClass",
+            bootstrap_type="Bernoulli",
+            random_seed=SEED,
+            allow_writing_files=False,
+            verbose=False,
             **params,
         )
     raise ValueError(f"unknown model: {name}")
@@ -280,10 +344,11 @@ def run_fold(
 ) -> tuple[pd.DataFrame, dict[str, float], dict[str, float], object]:
     """Train one (track, model, fold) and score it against the market.
 
-    `model_name` selects the algorithm ("logistic" or "lightgbm"); the actual
-    label written to `predictions` is whatever the caller passes as
-    `model_name` unmodified, so "lightgbm_tuned" (same algorithm, tuned
-    hyperparameters via `overrides`) is tracked as its own configuration.
+    `model_name` selects the algorithm ("logistic", "lightgbm", "xgboost",
+    "catboost", "mlp"); the actual label written to `predictions` is whatever
+    the caller passes as `model_name` unmodified, so a "<algo>_tuned" config
+    (same algorithm, tuned hyperparameters via `overrides`) is tracked as its
+    own configuration.
 
     Returns the fitted (calibrated) estimator alongside the metrics so the
     holdout fold's model -- the one trained on the most data, and therefore the
@@ -291,7 +356,7 @@ def run_fold(
     """
     cols = feature_columns(features, track)
     train, evaluation = split.apply(features)
-    algorithm = "lightgbm" if model_name == "lightgbm_tuned" else model_name
+    algorithm = model_name[: -len("_tuned")] if model_name.endswith("_tuned") else model_name
 
     # market_aware needs a price to train on, so drop unpriced rows from its
     # training set. market_blind keeps everything it can use.
@@ -330,65 +395,88 @@ def run_fold(
 
 
 # ---------------------------------------------------------------------------
-# LightGBM hyperparameter search (walk-forward folds only)
+# Hyperparameter search (walk-forward folds only)
 # ---------------------------------------------------------------------------
-def _sample_lightgbm_params(rng: np.random.Generator, search_space: dict) -> dict:
-    def sample(key: str, integer: bool = False):
-        lo, hi = search_space[key]
-        return int(rng.integers(lo, hi + 1)) if integer else float(rng.uniform(lo, hi))
-
-    return {
-        "num_leaves": sample("num_leaves", integer=True),
-        "learning_rate": sample("learning_rate"),
-        "n_estimators": sample("n_estimators", integer=True),
-        "min_child_samples": sample("min_child_samples", integer=True),
-        "subsample": sample("subsample"),
-        "colsample_bytree": sample("colsample_bytree"),
-        "reg_lambda": sample("reg_lambda"),
-    }
+# Hyperparameters whose search range is a range of integers. Everything else in
+# a search space is sampled as a uniform float. Kept as one set across all
+# algorithms so `_sample_params` needs no per-algorithm special-casing.
+_INTEGER_HYPERPARAMS = {
+    "num_leaves",
+    "n_estimators",
+    "min_child_samples",
+    "max_depth",
+    "min_child_weight",
+    "depth",
+    "iterations",
+}
 
 
-def tune_lightgbm(
+def _sample_params(rng: np.random.Generator, search_space: dict) -> dict:
+    """Draw one hyperparameter set from a `{name: [lo, hi]}` search space.
+
+    Names in `_INTEGER_HYPERPARAMS` are sampled as inclusive integers, the rest
+    as uniform floats. A `n_trials` key (the search budget, not a
+    hyperparameter) is ignored if present.
+    """
+    out = {}
+    for key, bounds in search_space.items():
+        if key == "n_trials":
+            continue
+        lo, hi = bounds
+        if key in _INTEGER_HYPERPARAMS:
+            out[key] = int(rng.integers(lo, hi + 1))
+        else:
+            out[key] = float(rng.uniform(lo, hi))
+    return out
+
+
+def tune_model(
     features: pd.DataFrame,
     track: str,
     folds: list[Split],
+    algorithm: str,
     n_trials: int,
     search_space: dict,
 ) -> tuple[dict, pd.DataFrame]:
-    """Random search over LightGBM hyperparameters, walk-forward folds ONLY.
+    """Random search over one algorithm's hyperparameters, walk-forward folds ONLY.
+
+    Generalizes across every tunable algorithm (lightgbm, xgboost, catboost):
+    the only algorithm-specific input is `search_space`, and the estimator being
+    scored comes straight from `build_model(algorithm, params)`.
 
     `folds` must never include the holdout split -- scoring a trial against it
     would turn the untouched test season into a tuning set, exactly the
-    contamination `register_champion`'s walk-forward-only selection rule
-    already exists to prevent one level up. No new dependency: a plain
-    `np.random.default_rng(SEED)` random search, not Optuna -- this search
-    space is small enough that a sample-efficient sampler buys little.
+    contamination `register_champion`'s walk-forward-only selection rule already
+    exists to prevent one level up. No new dependency: a plain
+    `np.random.default_rng(SEED)` random search, not Optuna -- these spaces are
+    small enough that a sample-efficient sampler buys little.
 
-    Returns (best_params, trials) so the full search is auditable, the same
-    way `register_champion` makes its own decision auditable.
+    Returns (best_params, trials) so the full search is auditable, the same way
+    `register_champion` makes its own decision auditable.
     """
     if any(split.name.startswith("holdout") for split in folds):
-        raise ValueError("tune_lightgbm must never be scored against the holdout split")
+        raise ValueError("tune_model must never be scored against the holdout split")
 
     cols = feature_columns(features, track)
     rng = np.random.default_rng(SEED)
 
     trials = []
     for trial in range(n_trials):
-        params = _sample_lightgbm_params(rng, search_space)
+        params = _sample_params(rng, search_space)
         fold_logloss = []
         for split in folds:
             train, evaluation = split.apply(features)
             if track == "market_aware":
                 train = train.dropna(subset=MARKET_FEATURES)
-            model, _, _ = fit_calibrated("lightgbm", train, cols, split, params)
+            model, _, _ = fit_calibrated(algorithm, train, cols, split, params)
             scored = evaluation.dropna(subset=MARKET_FEATURES).copy()
             proba, _ = apply_probability_floor(model.predict_proba(make_design(scored, cols)))
             fold_logloss.append(metrics.log_loss(scored["target"].to_numpy(), proba))
         mean_log_loss = float(np.mean(fold_logloss))
         trials.append({"trial": trial, "mean_wf_log_loss": mean_log_loss, **params})
         log.info(
-            "  lightgbm_tuned/%s trial %2d/%d: wf logloss %.4f",
+            "  %s_tuned/%s trial %2d/%d: wf logloss %.4f",
+            algorithm,
             track,
             trial + 1,
             n_trials,
@@ -398,34 +486,59 @@ def tune_lightgbm(
     trials_df = pd.DataFrame(trials).sort_values("mean_wf_log_loss").reset_index(drop=True)
     best = trials_df.iloc[0]
     best_params = {
-        k: (int(v) if k in ("num_leaves", "n_estimators", "min_child_samples") else v)
+        k: (int(v) if k in _INTEGER_HYPERPARAMS else float(v))
         for k, v in best.items()
         if k not in ("trial", "mean_wf_log_loss")
     }
     return best_params, trials_df
 
 
+def tune_lightgbm(
+    features: pd.DataFrame,
+    track: str,
+    folds: list[Split],
+    n_trials: int,
+    search_space: dict,
+) -> tuple[dict, pd.DataFrame]:
+    """LightGBM-specific entry point to `tune_model`, retained for callers and
+    tests that predate the multi-algorithm search."""
+    return tune_model(features, track, folds, "lightgbm", n_trials, search_space)
+
+
 # ---------------------------------------------------------------------------
 # Stacking ensemble (walk-forward folds only, meta-learner on its own slice)
 # ---------------------------------------------------------------------------
 class StackingEnsemble:
-    """A fitted meta-learner over two already-calibrated base models.
+    """A fitted meta-learner over several already-calibrated base models.
 
-    Exposes only `.predict_proba(X)`, which is all `apply_probability_floor`,
-    `mlflow.sklearn.log_model`'s signature inference, and the serving layer
-    (`api.py`/`predict.py`, which only ever call
+    The base learners are configurable (`train.stacking_base_models` in
+    params.yaml); by default calibrated logistic + lightgbm + xgboost +
+    catboost. Exposes only `.predict_proba(X)` / `.predict(X)`, which is all
+    `apply_probability_floor`, `mlflow.sklearn.log_model`'s signature inference,
+    and the serving layer (`api.py`/`predict.py`, which only ever call
     `champion.model.predict_proba(design)` generically) require -- so nothing
     downstream needs to change for stacking to become the registered champion.
+
+    `base_names` fixes the order in which the base models' probability vectors
+    are concatenated; it MUST match the order the meta-learner was trained on.
+    It defaults to the base_models dict's insertion order.
     """
 
-    def __init__(self, base_models: dict[str, object], meta_model: LogisticRegression, cols: list[str]):
+    def __init__(
+        self,
+        base_models: dict[str, object],
+        meta_model: LogisticRegression,
+        cols: list[str],
+        base_names: list[str] | None = None,
+    ):
         self.base_models = base_models
         self.meta_model = meta_model
         self.cols = cols
+        self.base_names = list(base_names) if base_names is not None else list(base_models)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         stacked = np.hstack(
-            [self.base_models[name].predict_proba(X) for name in ("logistic", "lightgbm")]
+            [self.base_models[name].predict_proba(X) for name in self.base_names]
         )
         return self.meta_model.predict_proba(stacked)
 
@@ -436,10 +549,10 @@ class StackingEnsemble:
 def run_fold_stacking(
     features: pd.DataFrame, split: Split, track: str
 ) -> tuple[pd.DataFrame, dict[str, float], dict[str, float], object]:
-    """Stack calibrated logistic + calibrated lightgbm via a meta-learner.
+    """Stack the calibrated base models in STACKING_BASE_MODELS via a meta-learner.
 
     Three temporally disjoint slices of the training window (`stacking_split`):
-    fit_seasons trains the two base models, calib_seasons calibrates them
+    fit_seasons trains the base models, calib_seasons calibrates them
     (identical to `fit_calibrated`), and meta_seasons -- seen by neither the
     base models nor their calibrators -- trains the meta-learner. Training the
     meta-learner on calib_seasons instead would double-dip the exact
@@ -460,7 +573,7 @@ def run_fold_stacking(
     meta_rows = train[train["season"].isin(meta_seasons)]
 
     base_models = {}
-    for name in ("logistic", "lightgbm"):
+    for name in STACKING_BASE_MODELS:
         base = build_model(name)
         base.fit(make_design(fit_rows, cols), fit_rows["target"].to_numpy())
         with warnings.catch_warnings():
@@ -470,12 +583,12 @@ def run_fold_stacking(
         base_models[name] = calibrated
 
     meta_design = np.hstack(
-        [base_models[name].predict_proba(make_design(meta_rows, cols)) for name in ("logistic", "lightgbm")]
+        [base_models[name].predict_proba(make_design(meta_rows, cols)) for name in STACKING_BASE_MODELS]
     )
     meta_model = LogisticRegression(max_iter=2000, random_state=SEED)
     meta_model.fit(meta_design, meta_rows["target"].to_numpy())
 
-    ensemble = StackingEnsemble(base_models, meta_model, cols)
+    ensemble = StackingEnsemble(base_models, meta_model, cols, STACKING_BASE_MODELS)
 
     scored = evaluation.dropna(subset=MARKET_FEATURES).copy()
     proba, n_floored = apply_probability_floor(ensemble.predict_proba(make_design(scored, cols)))
@@ -509,6 +622,24 @@ def _stacking_split_ok(train_seasons: tuple[int, ...]) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _mlflow_model_params(model_name: str, overrides: dict | None) -> dict:
+    """Flatten a configuration's hyperparameters for MLflow logging.
+
+    Each key is algorithm-prefixed so tracks and configurations stay comparable
+    in the MLflow UI. `*_tuned` configs log the searched `overrides`; fixed
+    configs log their params.yaml block; stacking logs its base-model list.
+    """
+    if model_name.endswith("_tuned"):
+        algorithm = model_name[: -len("_tuned")]
+        return {f"{algorithm}_tuned_{k}": v for k, v in (overrides or {}).items()}
+    if model_name == "stacking":
+        return {"base_models": ",".join(STACKING_BASE_MODELS)}
+    if model_name in _T:
+        prefix = "logreg" if model_name == "logistic" else model_name
+        return {f"{prefix}_{k}": v for k, v in _T[model_name].items()}
+    return {}
 
 
 def main() -> pd.DataFrame:
@@ -557,35 +688,34 @@ def main() -> pd.DataFrame:
         cols = feature_columns(features, track)
         log.info("track=%s uses %d features", track, len(cols))
 
-        tuned_params: dict | None = None
-
         for model_name in MODELS:
-            if model_name == "lightgbm_tuned":
-                # Tuned ONCE per track, scored on walk-forward folds only --
-                # never `folds` (which appends the holdout).
-                tuned_params, search_trials = tune_lightgbm(
-                    features, track, walk_forward_splits(), LIGHTGBM_SEARCH["n_trials"], LIGHTGBM_SEARCH
+            overrides: dict | None = None
+            if model_name.endswith("_tuned"):
+                # Tuned ONCE per (track, algorithm), scored on walk-forward folds
+                # only -- never `folds` (which appends the holdout).
+                algorithm = model_name[: -len("_tuned")]
+                search_space = _T[f"{algorithm}_search"]
+                overrides, search_trials = tune_model(
+                    features,
+                    track,
+                    walk_forward_splits(),
+                    algorithm,
+                    search_space["n_trials"],
+                    search_space,
                 )
-                search_path = REPORTS_DIR / f"lightgbm_search_{track}.csv"
+                search_path = REPORTS_DIR / f"{algorithm}_search_{track}.csv"
                 search_trials.to_csv(search_path, index=False)
-                log.info("track=%s lightgbm_tuned best: %s", track, tuned_params)
-                with mlflow.start_run(run_name=f"{track}__lightgbm_tuning"):
-                    mlflow.log_params({"track": track, "n_trials": LIGHTGBM_SEARCH["n_trials"]})
+                log.info("track=%s %s best: %s", track, model_name, overrides)
+                with mlflow.start_run(run_name=f"{track}__{model_name}_search"):
+                    mlflow.log_params(
+                        {"track": track, "algorithm": algorithm, "n_trials": search_space["n_trials"]}
+                    )
                     mlflow.log_metric(
                         "best_wf_log_loss", float(search_trials["mean_wf_log_loss"].min())
                     )
                     mlflow.log_artifact(str(search_path))
 
-            overrides = tuned_params if model_name == "lightgbm_tuned" else None
-
-            if model_name == "lightgbm_tuned":
-                model_params = {f"lgbm_tuned_{k}": v for k, v in (overrides or {}).items()}
-            elif model_name == "lightgbm":
-                model_params = {f"lgbm_{k}": v for k, v in _T["lightgbm"].items()}
-            elif model_name == "stacking":
-                model_params = {}
-            else:
-                model_params = {f"logreg_{k}": v for k, v in _T["logistic"].items()}
+            model_params = _mlflow_model_params(model_name, overrides)
 
             with mlflow.start_run(run_name=f"{track}__{model_name}"):
                 mlflow.log_params(
