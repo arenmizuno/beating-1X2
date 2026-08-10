@@ -502,6 +502,15 @@ def run_fold_stacking(
     return predictions, model_metrics, market_metrics, ensemble
 
 
+def _stacking_split_ok(train_seasons: tuple[int, ...]) -> bool:
+    """Whether `stacking_split` would succeed on this training window."""
+    try:
+        stacking_split(train_seasons)
+        return True
+    except ValueError:
+        return False
+
+
 def main() -> pd.DataFrame:
     ensure_dirs()
     MLRUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -511,8 +520,32 @@ def main() -> pd.DataFrame:
     features = pd.read_parquet(FEATURES_PATH)
     log.info("loaded %d feature rows, %d columns", len(features), features.shape[1])
 
-    folds = walk_forward_splits() + [holdout_split()]
+    wf_folds = walk_forward_splits()
+    folds = wf_folds + [holdout_split()]
     log.info("running %d folds (%d walk-forward + 1 holdout)", len(folds), len(folds) - 1)
+
+    # "stacking" needs 3 training seasons (fit + calibration + meta); the
+    # earliest walk-forward fold may not have that many. Champion selection
+    # must compare every candidate over the SAME walk-forward folds -- scoring
+    # configurations on different subsets would let one that skips a hard fold
+    # (here, the 2020 COVID season) look artificially strong. This is exactly
+    # the unfair comparison run_fold's own docstring warns against one level
+    # up (model vs market scored on identical rows only); it applies model vs
+    # model here. `common_wf_names` is the set every candidate, including
+    # stacking, can actually cover.
+    common_wf_names = {
+        split.name
+        for split in wf_folds
+        if _stacking_split_ok(split.train_seasons)
+    }
+    if len(common_wf_names) < len(wf_folds):
+        log.warning(
+            "champion selection uses %d/%d walk-forward folds for every candidate "
+            "(excluding %s -- too few training seasons for stacking's 3-way split)",
+            len(common_wf_names),
+            len(wf_folds),
+            sorted(s.name for s in wf_folds if s.name not in common_wf_names),
+        )
 
     all_predictions = []
     # Keyed by (track, model): walk-forward scores drive champion selection,
@@ -566,7 +599,8 @@ def main() -> pd.DataFrame:
                     }
                 )
 
-                fold_scores, market_scores = [], []
+                fold_scores_by_name: dict[str, dict] = {}
+                market_scores_by_name: dict[str, dict] = {}
 
                 for split in folds:
                     if model_name == "stacking":
@@ -582,8 +616,8 @@ def main() -> pd.DataFrame:
                             features, split, track, model_name, overrides
                         )
                     all_predictions.append(predictions)
-                    fold_scores.append(model_metrics)
-                    market_scores.append(market_metrics)
+                    fold_scores_by_name[split.name] = model_metrics
+                    market_scores_by_name[split.name] = market_metrics
 
                     is_holdout = split.name.startswith("holdout")
                     prefix = "holdout" if is_holdout else f"fold_{split.eval_seasons[0]}"
@@ -646,9 +680,16 @@ def main() -> pd.DataFrame:
                         {f"{prefix}_{k}": v for k, v in model_metrics.items()}
                     )
 
-                # Walk-forward means exclude the holdout, which is reported alone.
-                wf_model = pd.DataFrame(fold_scores[:-1]).mean()
-                wf_market = pd.DataFrame(market_scores[:-1]).mean()
+                # Walk-forward means for champion selection use ONLY the folds
+                # common to every candidate in this track (common_wf_names) --
+                # never a config-specific subset. The holdout is reported alone,
+                # never averaged in.
+                wf_model = pd.DataFrame(
+                    [fold_scores_by_name[name] for name in common_wf_names]
+                ).mean()
+                wf_market = pd.DataFrame(
+                    [market_scores_by_name[name] for name in common_wf_names]
+                ).mean()
                 mlflow.log_metrics({f"wf_mean_model_{k}": v for k, v in wf_model.items()})
                 mlflow.log_metrics({f"wf_mean_market_{k}": v for k, v in wf_market.items()})
                 mlflow.log_metric(
