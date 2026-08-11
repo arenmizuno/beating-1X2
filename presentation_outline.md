@@ -2,7 +2,7 @@
 
 ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 `reports/summary.md`, `reports/champion.json`, and `reports/drift/drift_metrics.json`.
-14 slides, sized for a 10-15 minute presentation.
+16 slides, sized for a 10-15 minute presentation.
 
 ---
 
@@ -30,49 +30,75 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 3 — Problem Statement & EDA
+## Slide 3 — Problem Statement
 
 **On slide:**
-- **Task:** multiclass classification of match outcome — Home / Draw / Away — from pre-kickoff features
-- **Value bet:** where model probability diverges from market-implied probability beyond a threshold
-- **Data & scope:** top-5 European leagues (EPL, La Liga, Bundesliga, Serie A, Ligue 1), 2018-19 -> 2025-26
-  - **14,285** matches ingested -> **13,786** usable (require prior match history for both sides)
-  - Sources: football-data.co.uk (odds), Understat (xG), ClubElo (ratings)
-  - Cross-source join rate: **99.99%** (14,284 / 14,285) after hand-verified team-name mapping
-- **Class balance:** home win ~44%, draw ~26%, away win ~30%
+- **Research question:** can a machine-learning model using public pre-kickoff data (xG, Elo, form) beat the soccer betting market's closing line?
+- **Task:** multiclass classification of match outcome — Home / Draw / Away — from pre-kickoff features only
+- **Value bet:** flag a wager where model probability exceeds the market-implied probability by more than a threshold
+- **What "beating the market" means here:** a lower probabilistic **log loss** than the vig-free closing line — a genuine informational edge, not just accuracy
+- **Why it's hard:** the closing line aggregates the sharpest money, so beating it is the standard test of market efficiency
 
-**Speaker note:** "Three sources, three different spellings for every club — harmonizing them cleanly was a real engineering problem, solved as a global assignment, not fuzzy lookups."
+**Speaker note:** "The whole project is one question — is there an exploitable pre-kickoff edge the market hasn't already priced? Everything downstream exists to answer that credibly."
 
 ---
 
-## Slide 4 — Evaluation Metric & Two Baselines
+## Slide 4 — Data & EDA
 
 **On slide:**
-- **Primary metric: multiclass log loss** (proper scoring rule, punishes overconfident probabilities — the right lens for betting)
+- **Scope:** top-5 European leagues (EPL, La Liga, Bundesliga, Serie A, Ligue 1), seasons **2018-19 -> 2025-26**
+- **Volume:** **14,285** matches ingested -> **13,786** usable (both sides need prior match history for rolling features)
+- **Three sources, one row per match:** football-data.co.uk (odds / results) · Understat (expected goals) · ClubElo (team ratings)
+- **Cross-source join rate: 99.99%** (14,284 / 14,285) after hand-verified team-name mapping
+- **Class balance:** home win **~44%**, draw **~26%**, away win **~30%** — persistent home advantage
+- **EDA highlight:** home-win rate holds at 44-45% every season *except* **2020-21**, where it fell to **39.8%** (empty stadiums) — foreshadows the drift slide
+
+**Speaker note:** "Three sources spell every club differently — harmonizing them cleanly was a real engineering problem, solved as a global assignment, not fuzzy lookups. The home-advantage dip in 2020-21 is real, and it comes back in monitoring."
+
+---
+
+## Slide 5 — Evaluation Metric & Two Baselines
+
+**On slide:**
+- **Primary metric: multiclass log loss** — a proper scoring rule that punishes overconfident probabilities; the right lens for betting, where *calibrated probability* matters more than raw accuracy
 - Secondary: Brier score, ECE (calibration), accuracy
-- **Two baselines the model must beat:**
-  - Vig-free closing market line (Shin devig): **0.9691** log loss
-  - Dixon-Coles Poisson goals model (never sees a price): **0.9926** log loss
+- **Two baselines, each chosen to answer a different question:**
+  - **Vig-free closing market line** (Shin devig): **0.9691** — *the bar to clear.* The sharpest public probability there is; beating it is the definition of an edge. Doubles as a **leakage tripwire** — a sharp line lands ~0.95-1.02, so beating it by a lot means a bug, not skill.
+  - **Dixon-Coles Poisson goals model** (never sees a price): **0.9926** — *the "reasonable model" control.* Shows what a principled, price-blind approach achieves, isolating whether our ML adds anything over a classic goals model. Kept out of the feature set so it stays an independent yardstick.
 - **Split discipline:** 5-fold **walk-forward** CV + **2025-26 holdout sealed** until final validation; no random K-fold anywhere
 
-**Speaker note:** "A sharp closing line should land around 0.95-1.02 log loss. Anything that beats it by a lot would be a leakage bug, not skill — so the market baseline doubles as our leakage tripwire."
+**Speaker note:** "We picked two baselines on purpose. The market line is the thing to beat and our leakage alarm. Dixon-Coles is the sanity control — if the fancy models can't even out-predict a textbook Poisson goals model, that's worth knowing. Our models land between the two."
 
 ---
 
-## Slide 5 — System Architecture
+## Slide 6 — System Architecture (overview)
 
-**On slide (diagram + labels):**
-- **Training pipeline:** ingest (3 sources, cached/throttled) -> harmonize (Hungarian algorithm team matching) -> market devig -> **features (shift-then-roll, leakage-guarded)** -> walk-forward splits -> **train (2 tracks x 4 models)** -> MLflow tracking + Model Registry
-- **Serving pipeline:** Docker + FastAPI -> resolve `models:/beating-1x2@champion` -> `model_contract.json` (feature list + column order) -> predictions + value flags -> Streamlit + Evidently monitoring
-- **Two orchestrators, two jobs:**
-  - **DVC** = reproducible build DAG (`dvc repro` rebuilds only what changed)
-  - **Prefect** = scheduler/runtime (concurrent ingestion, retries, observability)
+**On slide (one end-to-end diagram — boxes + arrows, minimal prose):**
+- **Training:** ingest (3 sources) -> harmonize -> market devig -> features (leakage-guarded) -> walk-forward splits -> train (2 tracks x 9 configs) -> MLflow tracking + Model Registry
+- **Serving:** Docker + FastAPI -> resolve `models:/beating-1x2@champion` -> predictions + value flags -> Streamlit + Evidently monitoring
+- **Two orchestrators, two jobs:** **DVC** = reproducible build DAG (`dvc repro`) · **Prefect** = scheduler/runtime (concurrent ingestion, retries, observability)
+- *The next four slides zoom into each subsystem: data + features, training/selection, deployment, monitoring.*
 
-**Speaker note:** "Training and serving share ONE feature code path — the classic source of train/serve skew is avoided by appending upcoming fixtures to history and running the exact same pipeline."
+**Speaker note:** "This is the map. One thing to flag up front — training and serving share ONE feature code path, so there is no train/serve skew. The following slides drill into each box."
 
 ---
 
-## Slide 6 — Experiment Tracking & Model Selection
+## Slide 7 — Ingestion & Feature Engineering
+
+**On slide:**
+- **Ingestion:** three third-party sources pulled concurrently with retries (Prefect), cached and throttled to stay polite
+- **Harmonization:** every club is spelled three ways; team-name matching is solved as a **global assignment (Hungarian algorithm)**, not fuzzy per-row lookups -> **99.99%** join
+- **Market devig:** Shin method strips the bookmaker margin -> vig-free probabilities
+- **54 features:** rolling form (r5/r10), Elo ratings, rest days, and Dixon-Coles-derived attack/defense strengths
+- **Leakage discipline (the centerpiece): shift-then-roll** — every rolling window is shifted by one match so a game never sees itself; only prior matches feed a fixture; enforced by the walk-forward splits
+- **Mutation-tested guard:** CI flips `shift(1)` -> `shift(0)` and **fails the build if the leakage tests stay green**
+- **One feature code path** for training and serving -> no train/serve skew
+
+**Speaker note:** "This is where most of the engineering risk lived. The leakage guard is the detail to land — and it is itself tested by mutation, so a guard that silently breaks can't pass CI. The same code builds features at train time and at inference."
+
+---
+
+## Slide 8 — Experiment Tracking & Model Selection
 
 **On slide:**
 - **MLflow** tracks every run's params, metrics, and artifacts; Model Registry holds `beating-1x2` with `@champion` alias
@@ -89,7 +115,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 7 — Model Results (the core evidence)
+## Slide 9 — Model Results (the core evidence)
 
 **On slide — Walk-forward mean log loss, `market_aware` track (lower is better):**
 
@@ -118,21 +144,21 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 8 — Value-Bet Backtest (the economic verdict)
+## Slide 10 — Value-Bet Backtest (the economic verdict)
 
 **On slide:**
-- ROI reported with **95% bootstrap CIs** — a few hundred bets at ~5.0 odds are enormously noisy
-- **Champion (market_aware/stacking), walk-forward, absolute edge:**
-  - 3,154 bets · strike rate 30.7% · **flat ROI -0.01%** · 95% CI **[-7.0%, +7.0%]** · mean CLV **-1.4%**
-- **No configuration is profitable; no threshold (0.02-0.20 sweep) produces an ROI whose 95% CI excludes zero**
-- **Closing-line value (CLV) is negative throughout** — only **31-47%** of selections beat the close
-- Best-looking point estimate: **+6.5% ROI** — but CI **[-17.8%, +34.2%]** on 362 bets -> noise, not signal
+- ROI reported with **95% bootstrap CIs** — a few hundred bets at ~6.1 odds are enormously noisy
+- **Champion (market_aware/catboost_tuned), walk-forward, absolute edge:**
+  - 2,329 bets · strike rate 31.8% · **flat ROI +0.08%** · 95% CI **[-9.3%, +9.6%]** · mean CLV **-3.3%**
+- **No configuration is profitable** — across the **0.02-0.20 threshold sweep**, not one produces an ROI whose 95% CI excludes zero
+- **Closing-line value is negative** in every walk-forward configuration — only **21-48%** of selections beat the close
+- Best point estimate anywhere: **+0.6% ROI** (market_aware/logistic, holdout, +3.43 units on 544 bets) — but CI **[-12.0%, +14.4%]** -> noise, not signal
 
-**Speaker note:** "One holdout slice shows +0.6% ROI (+3.43 units on 544 bets), but its CI is [-12%, +14%]. Reporting that as a win would be noise-mining — which is exactly the mistake the CIs are there to prevent."
+**Speaker note:** "The single best-looking slice is +0.6% ROI on 544 holdout bets — and its CI is [-12%, +14%]. Reporting that as a win would be noise-mining, which is exactly what the CIs are there to prevent. Zero of our configurations clear zero with confidence."
 
 ---
 
-## Slide 9 — Deployment (Containerized API)
+## Slide 11 — Deployment (Containerized API)
 
 **On slide:**
 - **Docker + FastAPI**, `docker compose up --build` -> API at `:8000/docs`, dashboard at `:8501`
@@ -153,7 +179,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 10 — Production Monitoring (baseline + real drift)
+## Slide 12 — Production Monitoring (baseline + real drift)
 
 **On slide:**
 - **Stack:** custom KS + PSI statistics (version-proof) + **Evidently** HTML reports per season (2020-2025)
@@ -169,7 +195,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 11 — Drift Simulation & Anomaly Verification (required stress test)
+## Slide 13 — Drift Simulation & Anomaly Verification (required stress test)
 
 **Screenshot:** `reports/drift/stress_test.png` — the red "MONITOR ALERT — 3/3
 injected faults caught" report. Same view in the dashboard's **Stress test** tab.
@@ -189,11 +215,11 @@ inject faults and send them to the *deployed model*. The lesson is the table's
 right column: marginal input-drift monitoring alone would miss the column swap,
 and performance monitoring alone would miss the schema break. You need all three
 signals. This is the anomaly-verification step the rubric grades — and it
-complements Slide 10, which is a *real* detected shift rather than an injected one."
+complements Slide 12, which is a *real* detected shift rather than an injected one."
 
 ---
 
-## Slide 12 — Conclusions
+## Slide 14 — Conclusions
 
 **On slide:**
 - **The negative result IS the deliverable** — and it's well-evidenced:
@@ -207,7 +233,7 @@ complements Slide 10, which is a *real* detected shift rather than an injected o
 
 ---
 
-## Slide 13 — Limitations & Future Work
+## Slide 15 — Limitations & Future Work
 
 **On slide — Limitations:**
 - **Longshot bias:** at a 0.05 absolute edge the rule flags 74-89% of fixtures at mean odds >4.7; a relative-edge filter makes it *worse*, not better
@@ -225,12 +251,12 @@ complements Slide 10, which is a *real* detected shift rather than an injected o
 
 ---
 
-## Slide 14 — Repository & Questions
+## Slide 16 — Repository & Questions
 
 **On slide:**
 - **github.com/arenmizuno/beating-1X2** (public)
 - Reproduce locally: `pip install -r requirements.txt` -> run stages -> `docker compose up`; cold run < 10 min
-- **53 hermetic tests** (~2.5s, no network) · CI **mutation-tests the leakage guard** (flips `shift(1)`->`shift(0)`, fails if tests stay green)
+- **84 hermetic tests** (no network) · CI **mutation-tests the leakage guard** (flips `shift(1)`->`shift(0)`, fails if tests stay green)
 - Questions?
 
 **Speaker note:** "The leakage mutation test is the detail worth landing: a guard that never fails on a broken build is no guard at all."
