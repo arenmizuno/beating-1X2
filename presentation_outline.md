@@ -171,17 +171,25 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ## Slide 11 — Drift Simulation & Anomaly Verification (required stress test)
 
-**On slide:**
-- **Corrupt the sealed test set three ways:**
-  - Out-of-bounds random values (e.g. Elo = 50,000)
-  - Swap feature columns (home <-> away)
-  - Alter schema (drop / rename a required column)
-- **Send drifted data to the deployed API ->**
-  - Schema-invalid payloads rejected at the contract boundary (`model_contract.json`)
-  - Numeric corruption breaches KS/PSI -> dashboard flags drifted features and alerts
-- **Before/after screenshot:** green baseline run vs red corrupted run
+**Screenshot:** `reports/drift/stress_test.png` — the red "MONITOR ALERT — 3/3
+injected faults caught" report. Same view in the dashboard's **Stress test** tab.
 
-**Speaker note:** "Baseline validation first — clean holdout passes and matches the monitoring baseline. Then we break it and confirm the dashboard lights up. This is the anomaly-verification step the rubric grades."
+**On slide — baseline + three injected faults, scored through the deployed API:**
+- **Baseline:** clean 2025-26 holdout (1,702 rows) -> log loss **0.9828**, within tolerance of the monitoring baseline
+- **Each fault is caught by a *different* detector** (the whole point):
+
+| Fault | Corruption | What caught it |
+|---|---|---|
+| out_of_bounds | every feature 5-15x past its range | **54/54** features drift + prediction PSI **12.4** |
+| swapped_columns | home/away swapped, market price flipped | log loss **+0.386** (performance) — only 3/54 marginals move |
+| schema_break | xG feature family dropped | **12 missing** features (schema) — log loss barely moves |
+
+**Speaker note:** "Baseline validation first — the clean holdout passes. Then we
+inject faults and send them to the *deployed model*. The lesson is the table's
+right column: marginal input-drift monitoring alone would miss the column swap,
+and performance monitoring alone would miss the schema break. You need all three
+signals. This is the anomaly-verification step the rubric grades — and it
+complements Slide 10, which is a *real* detected shift rather than an injected one."
 
 ---
 

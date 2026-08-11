@@ -1,0 +1,100 @@
+{
+  "holdout_season": 2025,
+  "n_rows": 1702,
+  "scored_via": "http://127.0.0.1:8000/predict",
+  "champion": {
+    "version": "2",
+    "track": "market_aware",
+    "algorithm": "catboost_tuned"
+  },
+  "thresholds": {
+    "logloss_tolerance": 0.1,
+    "prediction_psi_tolerance": 0.2,
+    "drift_share": 0.2,
+    "ks_alpha": 0.01,
+    "psi": 0.2
+  },
+  "baseline": {
+    "log_loss": 0.9828,
+    "market_log_loss": 0.9759,
+    "gap_vs_market": 0.0069,
+    "ece": 0.0288,
+    "accuracy": 0.5288,
+    "outcome_mix": {
+      "H": 0.413,
+      "D": 0.2552,
+      "A": 0.3318
+    }
+  },
+  "scenarios": [
+    {
+      "name": "out_of_bounds",
+      "description": "Every feature replaced with values 5-15x above its observed range.",
+      "n_features_total": 54,
+      "n_features_drifted": 54,
+      "n_features_missing": 0,
+      "prediction_psi": 12.4367,
+      "log_loss": 1.078,
+      "delta_log_loss": 0.0952,
+      "ece": 0.0476,
+      "accuracy": 0.4407,
+      "gap_vs_market": 0.1021,
+      "outcome_mix": {
+        "H": 0.3931,
+        "D": 0.3005,
+        "A": 0.3065
+      },
+      "alert": true,
+      "reasons": [
+        "54/54 features drifted (KS+PSI)",
+        "prediction PSI 12.44"
+      ]
+    },
+    {
+      "name": "swapped_columns",
+      "description": "Home/away feature columns swapped, market home/away price flipped, differentials negated.",
+      "n_features_total": 54,
+      "n_features_drifted": 3,
+      "n_features_missing": 0,
+      "prediction_psi": 0.357,
+      "log_loss": 1.3687,
+      "delta_log_loss": 0.3859,
+      "ece": 0.3095,
+      "accuracy": 0.2145,
+      "gap_vs_market": 0.3928,
+      "outcome_mix": {
+        "H": 0.3137,
+        "D": 0.2577,
+        "A": 0.4286
+      },
+      "alert": true,
+      "reasons": [
+        "prediction PSI 0.36",
+        "log loss +0.386 vs baseline"
+      ]
+    },
+    {
+      "name": "schema_break (12 xG fields dropped)",
+      "description": "The entire xG feature family removed, as if the Understat feed went dark.",
+      "n_features_total": 54,
+      "n_features_drifted": 0,
+      "n_features_missing": 12,
+      "prediction_psi": 0.1272,
+      "log_loss": 0.9842,
+      "delta_log_loss": 0.0014,
+      "ece": 0.0224,
+      "accuracy": 0.5294,
+      "gap_vs_market": 0.0083,
+      "outcome_mix": {
+        "H": 0.404,
+        "D": 0.2624,
+        "A": 0.3336
+      },
+      "alert": true,
+      "reasons": [
+        "12 feature(s) missing (schema break)"
+      ]
+    }
+  ],
+  "n_alerts": 3
+}

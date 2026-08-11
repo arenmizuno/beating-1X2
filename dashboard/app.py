@@ -64,8 +64,8 @@ if champion:
         help="Lower log loss is better, so a positive gap means the market wins.",
     )
 
-results_tab, calibration_tab, drift_tab, live_tab = st.tabs(
-    ["Results", "Calibration", "Drift", "Live fixtures"]
+results_tab, calibration_tab, drift_tab, stress_tab, live_tab = st.tabs(
+    ["Results", "Calibration", "Drift", "Stress test", "Live fixtures"]
 )
 
 # ---------------------------------------------------------------------------
@@ -198,6 +198,95 @@ with drift_tab:
         if drifted:
             st.markdown("**Feature drift — features flagged per season**")
             st.bar_chart(pd.Series(drifted, name="drifted features"))
+
+# ---------------------------------------------------------------------------
+with stress_tab:
+    st.subheader("Drift stress test — corrupted data vs the deployed model")
+    stress = load_json(DRIFT_DIR / "stress_test.json")
+
+    if stress is None:
+        missing("reports/drift/stress_test.json — run `python -m src.stress_test`")
+    else:
+        base = stress["baseline"]
+        st.info(
+            f"Baseline: the clean {season_label(stress['holdout_season'])} holdout "
+            f"({stress['n_rows']} rows) scored through the model "
+            f"(**{stress['scored_via']}**). Each scenario below corrupts that same "
+            "test set and re-scores it. A scenario alerts when features go missing, "
+            "a fifth of features drift, the prediction mix shifts, or log loss "
+            "degrades past the tolerance."
+        )
+
+        n_alerts = stress["n_alerts"]
+        total = len(stress["scenarios"])
+        if n_alerts == total:
+            st.error(f"MONITOR ALERT — all {total}/{total} injected faults caught.")
+        elif n_alerts:
+            st.warning(f"MONITOR ALERT — {n_alerts}/{total} injected faults caught.")
+        else:
+            st.success("No anomalies detected.")
+
+        a, b, c, d = st.columns(4)
+        a.metric("Baseline log loss", f"{base['log_loss']:.4f}")
+        b.metric(
+            "Baseline vs market",
+            f"{base['market_log_loss']:.4f}",
+            delta=f"{base['gap_vs_market']:+.4f}",
+            delta_color="inverse",
+        )
+        c.metric("Baseline ECE", f"{base['ece']:.4f}")
+        d.metric("Faults caught", f"{n_alerts}/{total}")
+
+        table = pd.DataFrame(stress["scenarios"])
+        table["features_drifted"] = (
+            table["n_features_drifted"].astype(str) + "/" + table["n_features_total"].astype(str)
+        )
+        view = table[
+            [
+                "name", "alert", "features_drifted", "n_features_missing",
+                "prediction_psi", "log_loss", "delta_log_loss", "ece", "accuracy",
+            ]
+        ].rename(columns={"name": "scenario", "n_features_missing": "missing"})
+
+        def _flag_alert(row):
+            colour = "background-color: rgba(255,75,75,0.20)" if row["alert"] else ""
+            return [colour] * len(row)
+
+        st.dataframe(
+            view.style.apply(_flag_alert, axis=1),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        chart = table.set_index("name")[["delta_log_loss"]].rename(
+            columns={"delta_log_loss": "log-loss increase vs baseline"}
+        )
+        st.markdown("**Model degradation — log-loss increase over the clean baseline**")
+        st.bar_chart(chart)
+
+        for scenario in stress["scenarios"]:
+            marker = "🔴" if scenario["alert"] else "🟢"
+            with st.expander(f"{marker} {scenario['name']}"):
+                st.write(scenario["description"])
+                if scenario["reasons"]:
+                    st.markdown("**Alerts raised:**")
+                    for reason in scenario["reasons"]:
+                        st.markdown(f"- {reason}")
+                else:
+                    st.write("Within tolerance on every monitored signal.")
+                st.caption(
+                    f"Predicted outcome mix H/D/A: "
+                    f"{scenario['outcome_mix']['H']:.3f} / "
+                    f"{scenario['outcome_mix']['D']:.3f} / "
+                    f"{scenario['outcome_mix']['A']:.3f}  "
+                    f"(baseline {base['outcome_mix']['H']:.3f} / "
+                    f"{base['outcome_mix']['D']:.3f} / {base['outcome_mix']['A']:.3f})"
+                )
+        st.caption(
+            "This complements the Drift tab: that one detects a real historical "
+            "shift (COVID); this one injects known faults into the served test set "
+            "and verifies the monitor catches each."
+        )
 
 # ---------------------------------------------------------------------------
 with live_tab:

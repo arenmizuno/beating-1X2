@@ -72,12 +72,13 @@ See `reports/summary.md` for the generated detail.
 │   ├── train.py                  # stage 6: both tracks, both models, registry
 │   ├── evaluate.py               # stage 7: statistical + economic evaluation
 │   ├── drift.py                  # stage 8: feature/target/calibration drift
+│   ├── stress_test.py            # stage 8b: injected-fault drift stress test
 │   ├── ingest_fixtures.py        # upcoming fixtures + live pre-match odds
 │   ├── prediction_markets.py     # Kalshi/Polymarket enrichment (best-effort)
 │   ├── predict.py                # shared scoring path (API + batch)
 │   └── api.py                    # FastAPI service
 ├── dashboard/app.py             # Streamlit monitoring dashboard
-├── tests/                       # 53 hermetic tests, no network
+├── tests/                       # 84 hermetic tests, no network
 ├── data/
 │   ├── mappings/team_aliases_manual.csv   # committed, hand-verified
 │   ├── raw/ interim/ processed/  # gitignored; rebuilt by the pipeline
@@ -409,9 +410,33 @@ Calibration decay is tracked as the **gap to the market**, not raw log loss: a
 season where everyone scored worse was a hard season; a season where only we
 scored worse is model decay.
 
+### Drift stress test
+
+`src/drift.py` detects a *real* historical shift. `src/stress_test.py` does the
+complementary thing: it validates a serving baseline, then injects **known
+faults** and confirms the monitor catches each. It scores the clean holdout
+through the deployed API (`API_URL`), or the identical in-process path if no
+server is up, then re-scores three corrupted copies:
+
+| Fault | Corruption | Caught by |
+|---|---|---|
+| `out_of_bounds` | every feature pushed far past its range | 54/54 features drift (KS+PSI), prediction PSI 12.4 |
+| `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.39 — **performance**, not input drift (only 3/54 marginals move) |
+| `schema_break` | the xG feature family dropped | 12 missing features — **schema**, though log loss barely moves |
+
+Each fault trips a *different* detector, which is the point: marginal input-drift
+monitoring alone would miss the column swap, and performance monitoring alone
+would miss the schema break. Outputs land in `reports/drift/stress_test.{json,csv}`
+plus a self-contained `stress_test.html` report (and `stress_test.png`), rendered
+interactively in the dashboard's **Stress test** tab.
+
+```bash
+python -m src.stress_test --api-url http://localhost:8000
+```
+
 ### Tests and CI
 
-53 hermetic tests, ~2.5s, no network — they run on synthetic frames so an outage
+84 hermetic tests, no network — they run on synthetic frames so an outage
 at any data source can never redden the build.
 
 The leakage tests are the centrepiece, and they are themselves verified by

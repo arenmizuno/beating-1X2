@@ -1,0 +1,163 @@
+feature,ks_statistic,ks_p_value,psi,drifted,missing,scenario
+home_elo,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+home_rest_days,1.0,0.0,12.269270377538097,True,False,out_of_bounds
+home_n_prior_matches,1.0,0.0,12.21749752801839,True,False,out_of_bounds
+home_n_prior_in_season,1.0,0.0,11.848904788548216,True,False,out_of_bounds
+home_dc_attack,1.0,0.0,12.408741200471944,True,False,out_of_bounds
+home_dc_defense,1.0,0.0,12.408737744275843,True,False,out_of_bounds
+home_dc_home_advantage,1.0,0.0,12.166577301434877,True,False,out_of_bounds
+home_dc_rho,1.0,0.0,12.424313981497882,True,False,out_of_bounds
+home_points_r5,1.0,0.0,12.267796441649377,True,False,out_of_bounds
+home_points_r10,1.0,0.0,11.886042574710842,True,False,out_of_bounds
+home_goals_for_r5,1.0,0.0,12.137933873646471,True,False,out_of_bounds
+home_goals_for_r10,1.0,0.0,12.331434105786837,True,False,out_of_bounds
+home_goals_against_r5,1.0,0.0,12.43001701801016,True,False,out_of_bounds
+home_goals_against_r10,1.0,0.0,12.409369382122115,True,False,out_of_bounds
+home_xg_for_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+home_xg_for_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+home_xg_against_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+home_xg_against_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+away_elo,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+away_rest_days,1.0,0.0,12.273714539682178,True,False,out_of_bounds
+away_n_prior_matches,1.0,0.0,12.191271360332914,True,False,out_of_bounds
+away_n_prior_in_season,1.0,0.0,11.824225540823186,True,False,out_of_bounds
+away_dc_attack,1.0,0.0,12.422682444016122,True,False,out_of_bounds
+away_dc_defense,1.0,0.0,12.422678987820024,True,False,out_of_bounds
+away_dc_home_advantage,1.0,0.0,12.166577301434877,True,False,out_of_bounds
+away_dc_rho,1.0,0.0,12.424313981497882,True,False,out_of_bounds
+away_points_r5,1.0,0.0,12.03874979922568,True,False,out_of_bounds
+away_points_r10,1.0,0.0,12.123234553003968,True,False,out_of_bounds
+away_goals_for_r5,1.0,0.0,11.931127563881134,True,False,out_of_bounds
+away_goals_for_r10,1.0,0.0,12.115741511474074,True,False,out_of_bounds
+away_goals_against_r5,1.0,0.0,12.525439287613773,True,False,out_of_bounds
+away_goals_against_r10,1.0,0.0,12.374005221628536,True,False,out_of_bounds
+away_xg_for_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+away_xg_for_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+away_xg_against_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+away_xg_against_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+elo_diff,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+rest_diff,1.0,0.0,9.317153503852829,True,False,out_of_bounds
+points_diff_r5,1.0,0.0,11.891432022352737,True,False,out_of_bounds
+xg_diff_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+goal_diff_r5,1.0,0.0,12.34125556330397,True,False,out_of_bounds
+xg_overperformance_r5,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+points_diff_r10,1.0,0.0,12.351824770825164,True,False,out_of_bounds
+xg_diff_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+goal_diff_r10,1.0,0.0,12.342297634203012,True,False,out_of_bounds
+xg_overperformance_r10,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+dc_attack_diff,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+dc_defense_diff,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+dc_lambda_home,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+dc_lambda_away,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+dc_goal_diff_expected,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+p_market_H,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+p_market_D,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+p_market_A,1.0,0.0,12.422675531623923,True,False,out_of_bounds
+home_elo,0.0099882491186839,0.9999958804725595,0.003453415822866146,False,False,swapped_columns
+home_rest_days,0.012925969447708578,0.9988747463587739,0.0003257521688609182,False,False,swapped_columns
+home_n_prior_matches,0.004700352526439483,1.0,0.00023707117555145753,False,False,swapped_columns
+home_n_prior_in_season,0.0023501762632197414,0.9999999999999998,0.00031207204453985996,False,False,swapped_columns
+home_dc_attack,0.00881316098707403,0.9999999261638093,0.0013996718530447875,False,False,swapped_columns
+home_dc_defense,0.00881316098707403,0.9999999261638093,0.0006747436825608749,False,False,swapped_columns
+home_dc_home_advantage,0.0,1.0,0.0,False,False,swapped_columns
+home_dc_rho,0.0,1.0,0.0,False,False,swapped_columns
+home_points_r5,0.023501762632197415,0.7352282202783822,0.0069828300312490725,False,False,swapped_columns
+home_points_r10,0.025851938895417155,0.6203316380522547,0.012347367043102096,False,False,swapped_columns
+home_goals_for_r5,0.029964747356051705,0.4295279324915868,0.008116241712430187,False,False,swapped_columns
+home_goals_for_r10,0.022914218566392478,0.7630643516376812,0.017070434575769303,False,False,swapped_columns
+home_goals_against_r5,0.03172737955346651,0.35851898132787596,0.00929948240401227,False,False,swapped_columns
+home_goals_against_r10,0.021151586368977675,0.8411111286084945,0.005701030424282927,False,False,swapped_columns
+home_xg_for_r5,0.0499412455934195,0.028656368954298038,0.015970854295692827,False,False,swapped_columns
+home_xg_for_r10,0.03701527614571093,0.19406284215545008,0.007347687203719623,False,False,swapped_columns
+home_xg_against_r5,0.043478260869565216,0.08010827127175413,0.012263243977837616,False,False,swapped_columns
+home_xg_against_r10,0.03055229142185664,0.40499561368611475,0.007549449677313017,False,False,swapped_columns
+away_elo,0.0099882491186839,0.9999958804725595,0.0026698736238803538,False,False,swapped_columns
+away_rest_days,0.012925969447708578,0.9988747463587739,0.0003257521688609184,False,False,swapped_columns
+away_n_prior_matches,0.004700352526439483,1.0,0.00041863860864326197,False,False,swapped_columns
+away_n_prior_in_season,0.0023501762632197414,0.9999999999999998,0.0003120720445398587,False,False,swapped_columns
+away_dc_attack,0.00881316098707403,0.9999999261638093,0.002012807323811314,False,False,swapped_columns
+away_dc_defense,0.00881316098707403,0.9999999261638093,0.0006613445818372326,False,False,swapped_columns
+away_dc_home_advantage,0.0,1.0,0.0,False,False,swapped_columns
+away_dc_rho,0.0,1.0,0.0,False,False,swapped_columns
+away_points_r5,0.023501762632197415,0.7352282202783822,0.006982830031249072,False,False,swapped_columns
+away_points_r10,0.025851938895417155,0.6203316380522547,0.010736631507096682,False,False,swapped_columns
+away_goals_for_r5,0.029964747356051705,0.4295279324915868,0.009805490538415524,False,False,swapped_columns
+away_goals_for_r10,0.022914218566392478,0.7630643516376812,0.009792287501563504,False,False,swapped_columns
+away_goals_against_r5,0.03172737955346651,0.35851898132787596,0.009636040511014231,False,False,swapped_columns
+away_goals_against_r10,0.021151586368977675,0.8411111286084945,0.005944655632204194,False,False,swapped_columns
+away_xg_for_r5,0.0499412455934195,0.028656368954298038,0.022651084548509375,False,False,swapped_columns
+away_xg_for_r10,0.03701527614571093,0.19406284215545008,0.005023262061746607,False,False,swapped_columns
+away_xg_against_r5,0.043478260869565216,0.08010827127175413,0.012047523446005234,False,False,swapped_columns
+away_xg_against_r10,0.03055229142185664,0.40499561368611475,0.008134550075435586,False,False,swapped_columns
+elo_diff,0.01762632197414806,0.9542285815270896,0.006785464527238826,False,False,swapped_columns
+rest_diff,0.009400705052878966,0.9999993313500023,0.0013212795657153735,False,False,swapped_columns
+points_diff_r5,0.05992949471210341,0.004420391660173408,0.027824935171635163,False,False,swapped_columns
+xg_diff_r5,0.08225616921269095,1.975025571535252e-05,0.04256440841941538,False,False,swapped_columns
+goal_diff_r5,0.06345475910693302,0.0021068605640985074,0.01602675992859791,False,False,swapped_columns
+xg_overperformance_r5,0.0,1.0,0.0,False,False,swapped_columns
+points_diff_r10,0.04171562867215041,0.10343743190267635,0.0095997253791711,False,False,swapped_columns
+xg_diff_r10,0.05699177438307873,0.007935370835003232,0.01730853762704978,False,False,swapped_columns
+goal_diff_r10,0.031139835487661575,0.38131640099067676,0.009896510229226843,False,False,swapped_columns
+xg_overperformance_r10,0.0,1.0,0.0,False,False,swapped_columns
+dc_attack_diff,0.014688601645123384,0.9929671483403376,0.005025962794441693,False,False,swapped_columns
+dc_defense_diff,0.01880141010575793,0.9244612281286727,0.009254861449255185,False,False,swapped_columns
+dc_lambda_home,0.0,1.0,0.0,False,False,swapped_columns
+dc_lambda_away,0.0,1.0,0.0,False,False,swapped_columns
+dc_goal_diff_expected,0.282021151586369,5.287869496798018e-60,0.4076645115557885,True,False,swapped_columns
+p_market_H,0.3219741480611046,2.0651381465356064e-78,0.506513207657569,True,False,swapped_columns
+p_market_D,0.0,1.0,0.0,False,False,swapped_columns
+p_market_A,0.3219741480611046,2.0651381465356064e-78,0.5071364753733862,True,False,swapped_columns
+home_elo,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_rest_days,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_n_prior_matches,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_n_prior_in_season,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_dc_attack,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_dc_defense,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_dc_home_advantage,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_dc_rho,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_points_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_points_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_goals_for_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_goals_for_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_goals_against_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_goals_against_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+home_xg_for_r5,,,,False,True,schema_break (12 xG fields dropped)
+home_xg_for_r10,,,,False,True,schema_break (12 xG fields dropped)
+home_xg_against_r5,,,,False,True,schema_break (12 xG fields dropped)
+home_xg_against_r10,,,,False,True,schema_break (12 xG fields dropped)
+away_elo,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_rest_days,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_n_prior_matches,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_n_prior_in_season,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_dc_attack,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_dc_defense,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_dc_home_advantage,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_dc_rho,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_points_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_points_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_goals_for_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_goals_for_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_goals_against_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_goals_against_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+away_xg_for_r5,,,,False,True,schema_break (12 xG fields dropped)
+away_xg_for_r10,,,,False,True,schema_break (12 xG fields dropped)
+away_xg_against_r5,,,,False,True,schema_break (12 xG fields dropped)
+away_xg_against_r10,,,,False,True,schema_break (12 xG fields dropped)
+elo_diff,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+rest_diff,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+points_diff_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+xg_diff_r5,,,,False,True,schema_break (12 xG fields dropped)
+goal_diff_r5,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+xg_overperformance_r5,,,,False,True,schema_break (12 xG fields dropped)
+points_diff_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+xg_diff_r10,,,,False,True,schema_break (12 xG fields dropped)
+goal_diff_r10,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+xg_overperformance_r10,,,,False,True,schema_break (12 xG fields dropped)
+dc_attack_diff,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+dc_defense_diff,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+dc_lambda_home,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+dc_lambda_away,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+dc_goal_diff_expected,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+p_market_H,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+p_market_D,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
+p_market_A,0.0,1.0,0.0,False,False,schema_break (12 xG fields dropped)
