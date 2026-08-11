@@ -2,7 +2,7 @@
 
 ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 `reports/summary.md`, `reports/champion.json`, and `reports/drift/drift_metrics.json`.
-16 slides, sized for a 10-15 minute presentation.
+17 slides, sized for a 10-15 minute presentation.
 
 ---
 
@@ -77,7 +77,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 - **Training:** ingest (3 sources) -> harmonize -> market devig -> features (leakage-guarded) -> walk-forward splits -> train (2 tracks x 9 configs) -> MLflow tracking + Model Registry
 - **Serving:** Docker + FastAPI -> resolve `models:/beating-1x2@champion` -> predictions + value flags -> Streamlit + Evidently monitoring
 - **Two orchestrators, two jobs:** **DVC** = reproducible build DAG (`dvc repro`) · **Prefect** = scheduler/runtime (concurrent ingestion, retries, observability)
-- *The next four slides zoom into each subsystem: data + features, training/selection, deployment, monitoring.*
+- *The following slides zoom into each subsystem: data + features, models, training/selection, deployment, monitoring.*
 
 **Speaker note:** "This is the map. One thing to flag up front — training and serving share ONE feature code path, so there is no train/serve skew. The following slides drill into each box."
 
@@ -98,24 +98,39 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 8 — Experiment Tracking & Model Selection
+## Slide 8 — Models & Modeling Approach
 
 **On slide:**
-- **MLflow** tracks every run's params, metrics, and artifacts; Model Registry holds `beating-1x2` with `@champion` alias
-- **Search space: 2 tracks x 9 configurations**
-  - Tracks: `market_blind` (no odds) vs `market_aware` (closing line as a feature)
-  - Model families: logistic · LightGBM · XGBoost · CatBoost · neural net (MLP) · stacking
-  - Three boosters carry both a fixed and a hyperparameter-tuned variant (`*_tuned`); the stack combines calibrated logistic + LightGBM + XGBoost + CatBoost
-- **Champion = `market_aware / catboost_tuned`** — 54 features, registered v2
-  - Selected by **walk-forward mean log loss (0.9740)**, never by holdout (which would burn the sealed test set)
-  - Hyperparameters chosen by a walk-forward-only random search (25 trials); the untouched holdout never scores a trial
-- **Calibration:** sigmoid (Platt), not isotonic — isotonic emitted exact zeros and lost on all 10 fold/model combos
+- **Two experimental tracks** (the core design question):
+  - `market_blind` — features only, no odds: *can we predict outcomes from the game itself?*
+  - `market_aware` — the closing line added as a feature: *given the market's own number, can we improve on it?*
+- **Six model families, climbing the complexity ladder:**
+  - **Logistic regression** — linear, interpretable floor
+  - **LightGBM · XGBoost · CatBoost** — gradient-boosted trees (the workhorses)
+  - **MLP** — a neural net, to test whether deep learning helps at this scale
+  - **Stacking** — a logistic meta-learner over the calibrated boosters
+- **Tuned variants:** each booster also runs a hyperparameter-tuned version (`*_tuned`) -> **9 configs per track, 18 total**
+- **All models are probability-calibrated** — betting needs trustworthy probabilities, not just correct rankings
 
-**Speaker note:** "Show the MLflow UI here — the run comparison across the 18 configurations, with tuned CatBoost on top. Tuned boosting beat the stack, which beat logistic; the neural net underperformed at this sample size."
+**Speaker note:** "The ladder is the point. If a tuned ensemble of four models plus a neural net still can't beat the closing line, that's strong evidence the edge isn't there — not that we picked the wrong model. Climbing from linear to deep to ensemble is how we falsify 'we just needed a better model.'"
 
 ---
 
-## Slide 9 — Model Results (the core evidence)
+## Slide 9 — Experiment Tracking & Model Selection
+
+**On slide:**
+- **MLflow** tracks every run's params, metrics, and artifacts; Model Registry holds `beating-1x2` with `@champion` alias + tags
+- **18 runs** (2 tracks x 9 configs) compared on a single metric
+- **Champion = `market_aware / catboost_tuned`** — 54 features, registered v2
+  - Selected by **walk-forward mean log loss (0.9740)**, never by holdout (which would burn the sealed test set)
+  - Hyperparameters chosen by a **walk-forward-only** random search (25 trials); the untouched holdout never scores a trial
+- **Calibration choice:** sigmoid (Platt) over isotonic — isotonic emitted exact zeros and lost on all 10 fold/model combos
+
+**Speaker note:** "Show the MLflow UI here — the run comparison across the 18 configurations, with tuned CatBoost on top. Tuned boosting beat the stack, which beat logistic; the neural net underperformed at this sample size. Nothing is selected on the holdout — only walk-forward mean."
+
+---
+
+## Slide 10 — Model Results (the core evidence)
 
 **On slide — Walk-forward mean log loss, `market_aware` track (lower is better):**
 
@@ -144,7 +159,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 10 — Value-Bet Backtest (the economic verdict)
+## Slide 11 — Value-Bet Backtest (the economic verdict)
 
 **On slide:**
 - ROI reported with **95% bootstrap CIs** — a few hundred bets at ~6.1 odds are enormously noisy
@@ -158,7 +173,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 11 — Deployment (Containerized API)
+## Slide 12 — Deployment (Containerized API)
 
 **On slide:**
 - **Docker + FastAPI**, `docker compose up --build` -> API at `:8000/docs`, dashboard at `:8501`
@@ -179,7 +194,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 12 — Production Monitoring (baseline + real drift)
+## Slide 13 — Production Monitoring (baseline + real drift)
 
 **On slide:**
 - **Stack:** custom KS + PSI statistics (version-proof) + **Evidently** HTML reports per season (2020-2025)
@@ -195,7 +210,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ---
 
-## Slide 13 — Drift Simulation & Anomaly Verification (required stress test)
+## Slide 14 — Drift Simulation & Anomaly Verification (required stress test)
 
 **Screenshot:** `reports/drift/stress_test.png` — the red "MONITOR ALERT — 3/3
 injected faults caught" report. Same view in the dashboard's **Stress test** tab.
@@ -215,11 +230,11 @@ inject faults and send them to the *deployed model*. The lesson is the table's
 right column: marginal input-drift monitoring alone would miss the column swap,
 and performance monitoring alone would miss the schema break. You need all three
 signals. This is the anomaly-verification step the rubric grades — and it
-complements Slide 12, which is a *real* detected shift rather than an injected one."
+complements Slide 13, which is a *real* detected shift rather than an injected one."
 
 ---
 
-## Slide 14 — Conclusions
+## Slide 15 — Conclusions
 
 **On slide:**
 - **The negative result IS the deliverable** — and it's well-evidenced:
@@ -233,7 +248,7 @@ complements Slide 12, which is a *real* detected shift rather than an injected o
 
 ---
 
-## Slide 15 — Limitations & Future Work
+## Slide 16 — Limitations & Future Work
 
 **On slide — Limitations:**
 - **Longshot bias:** at a 0.05 absolute edge the rule flags 74-89% of fixtures at mean odds >4.7; a relative-edge filter makes it *worse*, not better
@@ -251,7 +266,7 @@ complements Slide 12, which is a *real* detected shift rather than an injected o
 
 ---
 
-## Slide 16 — Repository & Questions
+## Slide 17 — Repository & Questions
 
 **On slide:**
 - **github.com/arenmizuno/beating-1X2** (public)
