@@ -25,26 +25,30 @@ matches for model and market:
 
 | track | model | log loss | vs market |
 |---|---|---|---|
-| market_blind | logistic | 1.0078 | +0.0385 |
-| market_blind | lightgbm | 1.0191 | +0.0498 |
-| **market_aware** | **logistic** | **0.9944** | **+0.0251** |
-| market_aware | lightgbm | 1.0069 | +0.0376 |
+| **market_aware** | **catboost_tuned (champion)** | **0.9766** | **+0.0073** |
+| market_aware | xgboost_tuned | 0.9790 | +0.0097 |
+| market_aware | logistic | 1.0012 | +0.0319 |
+| market_blind | catboost_tuned | 0.9895 | +0.0202 |
 | — | **market (vig-free closing line)** | **0.9693** | — |
+| — | Dixon-Coles goals baseline | 0.9926 | — |
 
 Three things worth drawing out:
 
-- **The market wins everywhere**, on every fold, every league, and both tracks.
+- **The market wins everywhere**, on every fold, every league, and both tracks —
+  across nine model families, three of them hyperparameter-tuned.
 - **`market_aware` still loses.** Even when handed the closing-line probability
-  as an input feature, the model degrades it. The features do not carry
-  information the market has not already priced.
-- **Logistic beats LightGBM** in both tracks. On this kind of data a linear
-  model over Elo and form differentials is genuinely competitive with boosting.
+  as an input feature, the model degrades it, and a round of engineered features
+  (opponent strength, venue-split form, congestion, standing) left the gap
+  unchanged. The features carry nothing the market has not already priced.
+- **Tuned boosting is the best of the field** — tuned CatBoost and XGBoost lead,
+  logistic and the neural net trail — yet every configuration still sits between
+  the market and the Dixon-Coles baseline.
 
 Economically, no configuration is profitable, and no edge threshold anywhere in
 a 0.02–0.20 sweep produces an ROI whose 95% confidence interval excludes zero.
-Closing-line value is negative throughout (mean −1% to −3%; only 31–47% of
-selections beat the close), which is the professional-standard verdict that
-there is no exploitable signal here.
+Closing-line value is negative throughout (the champion's mean CLV is −3.4%; only
+23–46% of selections beat the close), which is the professional-standard verdict
+that there is no exploitable signal here.
 
 See `reports/summary.md` for the generated detail.
 
@@ -78,7 +82,7 @@ See `reports/summary.md` for the generated detail.
 │   ├── predict.py                # shared scoring path (API + batch)
 │   └── api.py                    # FastAPI service
 ├── dashboard/app.py             # Streamlit monitoring dashboard
-├── tests/                       # 84 hermetic tests, no network
+├── tests/                       # 86 hermetic tests, no network
 ├── data/
 │   ├── mappings/team_aliases_manual.csv   # committed, hand-verified
 │   ├── raw/ interim/ processed/  # gitignored; rebuilt by the pipeline
@@ -420,8 +424,8 @@ server is up, then re-scores three corrupted copies:
 
 | Fault | Corruption | Caught by |
 |---|---|---|
-| `out_of_bounds` | every feature pushed far past its range | 54/54 features drift (KS+PSI), prediction PSI 12.4 |
-| `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.39 — **performance**, not input drift (only 3/54 marginals move) |
+| `out_of_bounds` | every feature pushed far past its range | 84/86 features drift (KS+PSI), prediction PSI 12.5 |
+| `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.40 — **performance**, not input drift (only 13/86 marginals move) |
 | `schema_break` | the xG feature family dropped | 12 missing features — **schema**, though log loss barely moves |
 
 Each fault trips a *different* detector, which is the point: marginal input-drift
@@ -436,7 +440,7 @@ python -m src.stress_test --api-url http://localhost:8000
 
 ### Tests and CI
 
-84 hermetic tests, no network — they run on synthetic frames so an outage
+86 hermetic tests, no network — they run on synthetic frames so an outage
 at any data source can never redden the build.
 
 The leakage tests are the centrepiece, and they are themselves verified by

@@ -106,6 +106,15 @@ features:
   # This is an expensive O(n) recomputation per sampled row, so keep it small.
   leakage_check_sample: 250
 
+  # Recency-weighted form: EWMA span (in matches) for the points_ewma feature.
+  # Smaller = weights the most recent matches more heavily.
+  ewma_span: 5
+
+  # Fixture-congestion window (days) for the matches_last{N} feature: how many
+  # of a team's own prior matches fell within this many days before kickoff.
+  # Domestic fixtures only -- the feed carries no cup/European midweek games.
+  congestion_days: 14
+
 # ---------------------------------------------------------------------------
 # Dixon-Coles goal model
 # ---------------------------------------------------------------------------

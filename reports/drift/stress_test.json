@@ -1,9 +1,9 @@
 {
   "holdout_season": 2025,
-  "n_rows": 1702,
+  "n_rows": 1609,
   "scored_via": "http://127.0.0.1:8000/predict",
   "champion": {
-    "version": "2",
+    "version": "3",
     "track": "market_aware",
     "algorithm": "catboost_tuned"
   },
@@ -15,80 +15,80 @@
     "psi": 0.2
   },
   "baseline": {
-    "log_loss": 0.9828,
-    "market_log_loss": 0.9759,
-    "gap_vs_market": 0.0069,
-    "ece": 0.0288,
-    "accuracy": 0.5288,
+    "log_loss": 0.9796,
+    "market_log_loss": 0.9737,
+    "gap_vs_market": 0.0059,
+    "ece": 0.0303,
+    "accuracy": 0.537,
     "outcome_mix": {
-      "H": 0.413,
-      "D": 0.2552,
-      "A": 0.3318
+      "H": 0.4147,
+      "D": 0.2548,
+      "A": 0.3305
     }
   },
   "scenarios": [
     {
       "name": "out_of_bounds",
       "description": "Every feature replaced with values 5-15x above its observed range.",
-      "n_features_total": 54,
-      "n_features_drifted": 54,
+      "n_features_total": 86,
+      "n_features_drifted": 84,
       "n_features_missing": 0,
-      "prediction_psi": 12.4367,
-      "log_loss": 1.078,
-      "delta_log_loss": 0.0952,
-      "ece": 0.0476,
-      "accuracy": 0.4407,
-      "gap_vs_market": 0.1021,
+      "prediction_psi": 12.4472,
+      "log_loss": 1.0769,
+      "delta_log_loss": 0.0973,
+      "ece": 0.0418,
+      "accuracy": 0.4444,
+      "gap_vs_market": 0.1032,
       "outcome_mix": {
-        "H": 0.3931,
-        "D": 0.3005,
-        "A": 0.3065
+        "H": 0.403,
+        "D": 0.3051,
+        "A": 0.2919
       },
       "alert": true,
       "reasons": [
-        "54/54 features drifted (KS+PSI)",
-        "prediction PSI 12.44"
+        "84/86 features drifted (KS+PSI)",
+        "prediction PSI 12.45"
       ]
     },
     {
       "name": "swapped_columns",
       "description": "Home/away feature columns swapped, market home/away price flipped, differentials negated.",
-      "n_features_total": 54,
-      "n_features_drifted": 3,
+      "n_features_total": 86,
+      "n_features_drifted": 13,
       "n_features_missing": 0,
-      "prediction_psi": 0.357,
-      "log_loss": 1.3687,
-      "delta_log_loss": 0.3859,
-      "ece": 0.3095,
-      "accuracy": 0.2145,
-      "gap_vs_market": 0.3928,
+      "prediction_psi": 0.3611,
+      "log_loss": 1.3842,
+      "delta_log_loss": 0.4046,
+      "ece": 0.3193,
+      "accuracy": 0.2132,
+      "gap_vs_market": 0.4106,
       "outcome_mix": {
-        "H": 0.3137,
-        "D": 0.2577,
-        "A": 0.4286
+        "H": 0.3124,
+        "D": 0.2534,
+        "A": 0.4341
       },
       "alert": true,
       "reasons": [
         "prediction PSI 0.36",
-        "log loss +0.386 vs baseline"
+        "log loss +0.405 vs baseline"
       ]
     },
     {
       "name": "schema_break (12 xG fields dropped)",
       "description": "The entire xG feature family removed, as if the Understat feed went dark.",
-      "n_features_total": 54,
+      "n_features_total": 86,
       "n_features_drifted": 0,
       "n_features_missing": 12,
-      "prediction_psi": 0.1272,
-      "log_loss": 0.9842,
-      "delta_log_loss": 0.0014,
-      "ece": 0.0224,
-      "accuracy": 0.5294,
-      "gap_vs_market": 0.0083,
+      "prediction_psi": 0.0749,
+      "log_loss": 0.9813,
+      "delta_log_loss": 0.0017,
+      "ece": 0.0274,
+      "accuracy": 0.5357,
+      "gap_vs_market": 0.0076,
       "outcome_mix": {
-        "H": 0.404,
-        "D": 0.2624,
-        "A": 0.3336
+        "H": 0.4078,
+        "D": 0.2602,
+        "A": 0.332
       },
       "alert": true,
       "reasons": [

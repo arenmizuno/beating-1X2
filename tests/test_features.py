@@ -19,6 +19,7 @@ import pytest
 
 from src.dixon_coles import walk_forward_ratings
 from src.features import (
+    add_derived_form,
     add_lagged_rolling,
     attach_dixon_coles,
     attach_elo,
@@ -33,7 +34,7 @@ def _build_long(matches: pd.DataFrame, elo: pd.DataFrame) -> pd.DataFrame:
     """The same attach chain build_feature_frame runs internally, exposed here
     so tests can probe the intermediate `long` frame directly. Small
     refit/min-match values keep this fast on the compact synthetic fixture."""
-    long = attach_elo(add_lagged_rolling(build_long_frame(matches)), elo)
+    long = add_derived_form(attach_elo(add_lagged_rolling(build_long_frame(matches)), elo))
     dc_ratings = walk_forward_ratings(
         matches,
         refit_every_matches=20,
@@ -130,6 +131,85 @@ def test_leakage_check_rejects_leaky_features(matches, elo):
 
     with pytest.raises(RuntimeError, match="leakage_check failed"):
         leakage_check(leaky, long, n_samples=50)
+
+
+def test_venue_split_form_uses_only_prior_same_venue_matches(matches, elo):
+    """points_venue_r5 must equal the mean points over a team's last 5 prior
+    matches AT THE SAME VENUE -- an independent brute-force recomputation of the
+    (team, is_home) grouping in add_derived_form."""
+    long = _build_long(matches, elo)
+    wide = pivot_to_wide(long, matches)
+
+    checked = 0
+    for row in wide.itertuples(index=False):
+        for side, is_home in (("home", 1), ("away", 0)):
+            actual = getattr(row, f"{side}_points_venue_r5")
+            if pd.isna(actual):
+                continue
+            team = getattr(row, f"{side}_team")
+            prior = long[
+                (long["team"] == team)
+                & (long["date"] < row.date)
+                & (long["is_home"] == is_home)
+            ].sort_values(["date", "match_id"], kind="stable")
+            expected = prior["points"].tail(5).mean()
+            assert np.isclose(actual, expected), f"{row.match_id} {side} {team}"
+            checked += 1
+
+    assert checked > 20, "too few populated venue-split values to be meaningful"
+
+
+def test_promoted_flag_marks_newly_appearing_teams():
+    """is_promoted is NaN in the first season (no prior-season info to compare
+    against), 0 for a returning team, and 1 for a team new to the league."""
+    teams_by_season = {2018: ["A", "B", "C", "D"], 2019: ["A", "B", "C", "E"]}
+    rows = []
+    for season, teams in teams_by_season.items():
+        start = pd.Timestamp(f"{season}-08-10")
+        i = 0
+        for home in teams:
+            for away in teams:
+                if home == away:
+                    continue
+                rows.append(
+                    {
+                        "match_id": f"E0_{season}_{home}_{away}",
+                        "league": "E0",
+                        "season": season,
+                        "date": start + pd.Timedelta(days=3 * i),
+                        "home_team": home,
+                        "away_team": away,
+                        "fthg": 1,
+                        "ftag": 0,
+                        "home_xg": 1.1,
+                        "away_xg": 0.4,
+                        "ftr": "H",
+                    }
+                )
+                i += 1
+    m = pd.DataFrame(rows)
+    m["date"] = pd.to_datetime(m["date"])
+    all_teams = sorted({t for teams in teams_by_season.values() for t in teams})
+    elo = pd.DataFrame(
+        {
+            "team": all_teams,
+            "league": "E0",
+            "level": 1,
+            "elo": [1500.0 + i for i in range(len(all_teams))],
+            "from_date": pd.to_datetime("2017-01-01"),
+            "to_date": pd.to_datetime("2030-01-01"),
+        }
+    )
+    elo["from_date"] = elo["from_date"].astype("datetime64[ns]")
+    elo["to_date"] = elo["to_date"].astype("datetime64[ns]")
+
+    long = add_derived_form(attach_elo(add_lagged_rolling(build_long_frame(m)), elo))
+
+    assert long[long["season"] == 2018]["is_promoted"].isna().all()
+    new_team = long[(long["season"] == 2019) & (long["team"] == "E")]
+    returning = long[(long["season"] == 2019) & (long["team"] == "A")]
+    assert (new_team["is_promoted"] == 1.0).all()
+    assert (returning["is_promoted"] == 0.0).all()
 
 
 def test_dc_features_do_not_use_current_match_result(matches, elo):

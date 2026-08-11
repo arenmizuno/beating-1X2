@@ -89,7 +89,10 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 - **Ingestion:** three third-party sources pulled concurrently with retries (Prefect), cached and throttled to stay polite
 - **Harmonization:** every club is spelled three ways; team-name matching is solved as a **global assignment (Hungarian algorithm)**, not fuzzy per-row lookups -> **99.99%** join
 - **Market devig:** Shin method strips the bookmaker margin -> vig-free probabilities
-- **54 features:** rolling form (r5/r10), Elo ratings, rest days, and Dixon-Coles-derived attack/defense strengths
+- **86 features** across two generations:
+  - *Base:* rolling form (r5/r10), Elo ratings, rest days, Dixon-Coles attack/defense strengths
+  - *Engineered (Tier-1):* strength-of-schedule + Elo over-performance, home/away-split form, recency-weighted (EWMA) form, fixture congestion, season points-per-game, promoted-team flag
+- **Honest result:** the engineered features left the gap to the market **unchanged** — it already prices team strength, form and schedule (see Conclusions). Kept as evidence, not spin.
 - **Leakage discipline (the centerpiece): shift-then-roll** — every rolling window is shifted by one match so a game never sees itself; only prior matches feed a fixture; enforced by the walk-forward splits
 - **Mutation-tested guard:** CI flips `shift(1)` -> `shift(0)` and **fails the build if the leakage tests stay green**
 - **One feature code path** for training and serving -> no train/serve skew
@@ -121,8 +124,8 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 **On slide:**
 - **MLflow** tracks every run's params, metrics, and artifacts; Model Registry holds `beating-1x2` with `@champion` alias + tags
 - **18 runs** (2 tracks x 9 configs) compared on a single metric
-- **Champion = `market_aware / catboost_tuned`** — 54 features, registered v2
-  - Selected by **walk-forward mean log loss (0.9740)**, never by holdout (which would burn the sealed test set)
+- **Champion = `market_aware / catboost_tuned`** — 86 features, registered v3
+  - Selected by **walk-forward mean log loss (0.9749)**, never by holdout (which would burn the sealed test set)
   - Hyperparameters chosen by a **walk-forward-only** random search (25 trials); the untouched holdout never scores a trial
 - **Calibration choice:** sigmoid (Platt) over isotonic — isotonic emitted exact zeros and lost on all 10 fold/model combos
 
@@ -136,40 +139,40 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 | Model | Log loss | Gap vs market |
 |---|---|---|
-| **catboost_tuned (champion)** | **0.9760** | **+0.0067** |
-| stacking | 0.9765 | +0.0090 |
-| xgboost_tuned | 0.9793 | +0.0100 |
-| catboost | 0.9809 | +0.0116 |
-| xgboost | 0.9940 | +0.0247 |
-| logistic | 0.9946 | +0.0253 |
-| lightgbm_tuned | 0.9961 | +0.0268 |
-| mlp (neural net) | 1.0034 | +0.0341 |
-| lightgbm | 1.0052 | +0.0359 |
+| **catboost_tuned (champion)** | **0.9766** | **+0.0073** |
+| stacking | 0.9779 | +0.0104 |
+| xgboost_tuned | 0.9790 | +0.0097 |
+| catboost | 0.9826 | +0.0133 |
+| xgboost | 0.9942 | +0.0249 |
+| lightgbm_tuned | 0.9962 | +0.0269 |
+| mlp (neural net) | 1.0000 | +0.0307 |
+| logistic | 1.0012 | +0.0319 |
+| lightgbm | 1.0048 | +0.0356 |
 | **Market (vig-free close)** | **0.9691** | — |
 | Dixon-Coles baseline | 0.9926 | — |
 
 *(The `market_blind` track shows the same ordering, ~0.010-0.030 worse per model — put it in backup.)*
 
 **Three takeaways (callout box):**
-- **The market wins everywhere** — every fold, every league, both tracks; the smallest gap anywhere is the champion's **+0.0067**, still positive
-- **`market_aware` still loses** — even handed the closing line, the model *degrades* it; the xG/Elo/form features carry nothing the market hasn't priced
+- **The market wins everywhere** — every fold, every league, both tracks; the smallest gap anywhere is the champion's **+0.0073**, still positive
+- **`market_aware` still loses** — even handed the closing line, the model *degrades* it; and a round of engineered features (opponent strength, venue, congestion, standing) left the gap unchanged — nothing the market hasn't already priced
 - **Tuned boosting > stacking > logistic > neural net**; nine model types all sit **between** the two baselines. The neural net underperforms at ~14k rows — deep learning does not pay off here
 
-**Speaker note:** "Champion holdout: 0.9851 vs market 0.9784 — the gap narrows on holdout but never closes. Consistent story. We threw nine model families at it, tuned three of them, and the market still won."
+**Speaker note:** "Champion holdout: 0.9853 vs market 0.9784 — the gap narrows on holdout but never closes. Consistent story. We threw nine model families at it, tuned three of them, engineered a dozen more features, and the market still won."
 
 ---
 
 ## Slide 11 — Value-Bet Backtest (the economic verdict)
 
 **On slide:**
-- ROI reported with **95% bootstrap CIs** — a few hundred bets at ~6.1 odds are enormously noisy
+- ROI reported with **95% bootstrap CIs** — a few hundred bets at ~6.0 odds are enormously noisy
 - **Champion (market_aware/catboost_tuned), walk-forward, absolute edge:**
-  - 2,329 bets · strike rate 31.8% · **flat ROI +0.08%** · 95% CI **[-9.3%, +9.6%]** · mean CLV **-3.3%**
+  - 2,429 bets · strike rate 31.2% · **flat ROI -1.6%** · 95% CI **[-10.0%, +7.8%]** · mean CLV **-3.4%**
 - **No configuration is profitable** — across the **0.02-0.20 threshold sweep**, not one produces an ROI whose 95% CI excludes zero
-- **Closing-line value is negative** in every walk-forward configuration — only **21-48%** of selections beat the close
-- Best point estimate anywhere: **+0.6% ROI** (market_aware/logistic, holdout, +3.43 units on 544 bets) — but CI **[-12.0%, +14.4%]** -> noise, not signal
+- **Closing-line value is negative** in every walk-forward configuration — only **23-46%** of selections beat the close
+- Best point estimate anywhere: a flat **+0.03% ROI** (market_aware/catboost_tuned, walk-forward relative edge, +0.4 units on 1,319 bets) — CI **[-14.9%, +15.5%]** -> pure noise
 
-**Speaker note:** "The single best-looking slice is +0.6% ROI on 544 holdout bets — and its CI is [-12%, +14%]. Reporting that as a win would be noise-mining, which is exactly what the CIs are there to prevent. Zero of our configurations clear zero with confidence."
+**Speaker note:** "The best-looking slice across every model and threshold is +0.03% ROI — essentially zero — and its CI spans -15% to +15%. There is no configuration whose profit clears zero with confidence, and closing-line value is negative throughout."
 
 ---
 
@@ -199,12 +202,12 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 **On slide:**
 - **Stack:** custom KS + PSI statistics (version-proof) + **Evidently** HTML reports per season (2020-2025)
 - **Reference window: 2018-19 + 2019-20 only** — a baseline must predate the shift you want to detect
-- **Thresholds:** KS alpha = 0.01, PSI = 0.20 · **32 features monitored**
+- **Thresholds:** KS alpha = 0.01, PSI = 0.20 · **54 features monitored**
 - **Real detected drift — 2020-21 COVID season:**
   - **Target drift at p < 0.0001** — home-win rate fell to **39.8%** from 44-45% either side (empty stadiums)
-  - Worst calibration gap: **market_blind/logistic, 2020, +0.094** log loss vs market
+  - Worst calibration gap: **market_blind/logistic, 2020, +0.095** log loss vs market
   - Also the worst-scoring fold for every configuration
-- Feature drift flagged: 2 features in 2023, 2 in 2025
+- Feature drift flagged: 2-6 of 54 features in recent seasons (roster/schedule churn)
 
 **Speaker note:** "This is drift we detected in real historical data, not injected noise. Calibration decay is tracked as gap-to-market, so a hard season for everyone doesn't false-alarm as model decay."
 
@@ -216,13 +219,13 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 injected faults caught" report. Same view in the dashboard's **Stress test** tab.
 
 **On slide — baseline + three injected faults, scored through the deployed API:**
-- **Baseline:** clean 2025-26 holdout (1,702 rows) -> log loss **0.9828**, within tolerance of the monitoring baseline
+- **Baseline:** clean 2025-26 holdout (1,609 rows) -> log loss **0.9796**, within tolerance of the monitoring baseline
 - **Each fault is caught by a *different* detector** (the whole point):
 
 | Fault | Corruption | What caught it |
 |---|---|---|
-| out_of_bounds | every feature 5-15x past its range | **54/54** features drift + prediction PSI **12.4** |
-| swapped_columns | home/away swapped, market price flipped | log loss **+0.386** (performance) — only 3/54 marginals move |
+| out_of_bounds | every feature 5-15x past its range | **84/86** features drift + prediction PSI **12.5** |
+| swapped_columns | home/away swapped, market price flipped | log loss **+0.405** (performance) — only 13/86 marginals move |
 | schema_break | xG feature family dropped | **12 missing** features (schema) — log loss barely moves |
 
 **Speaker note:** "Baseline validation first — the clean holdout passes. Then we
@@ -239,7 +242,8 @@ complements Slide 13, which is a *real* detected shift rather than an injected o
 **On slide:**
 - **The negative result IS the deliverable** — and it's well-evidenced:
   - No model beats the market on any fold, league, or track — nine model families, three of them hyperparameter-tuned
-  - Even a principled Dixon-Coles goals model (0.9926) and tuned CatBoost, the champion (0.9760), fall short of 0.9691
+  - Even a principled Dixon-Coles goals model (0.9926) and tuned CatBoost, the champion (0.9766), fall short of 0.9691
+  - A round of theory-driven feature engineering (opponent strength, venue-split form, congestion, standing) **left the gap unchanged** — further evidence the signal isn't there
   - No value threshold yields a profit whose CI excludes zero; CLV is negative throughout
 - **Interpretation:** the top-5 closing line is near-efficient — there is no exploitable pre-kickoff edge in public xG/Elo/form data
 - **What we actually delivered:** a reproducible, leakage-proof, containerized, monitored MLOps pipeline that establishes a negative result *credibly* — the professional-standard verdict

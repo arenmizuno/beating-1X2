@@ -26,6 +26,13 @@ Three specific hazards, and how each is handled:
       per team per season. Promoted clubs simply have no prior top-flight
       history and are dropped by the min_prior_matches filter until they do.
 
+`add_derived_form` layers on Tier-1 engineered features -- strength of schedule
+and Elo over-performance (opponent's as-of Elo), venue-split form (prior matches
+at the same venue only), recency-weighted points, fixture congestion, season
+points-per-game, and a promoted-team flag. Every one is built from strictly
+earlier matches by the same shift-then-roll discipline, and `leakage_check`
+independently re-derives the venue-split form as well as the plain rolling form.
+
 `leakage_check` re-derives a random sample of feature values from scratch, using
 only rows strictly earlier than the match in question, and asserts they match
 the pipeline output. It runs as part of the stage, not as an optional test.
@@ -60,6 +67,9 @@ FORM_WINDOWS: list[int] = _F["form_windows"]
 MIN_PRIOR_MATCHES: int = _F["min_prior_matches"]
 MAX_REST_DAYS: int = _F["max_rest_days"]
 LEAKAGE_SAMPLE: int = _F["leakage_check_sample"]
+EWMA_SPAN: int = _F.get("ewma_span", 5)
+CONGESTION_DAYS: int = _F.get("congestion_days", 14)
+CONGESTION_COL: str = f"matches_last{CONGESTION_DAYS}"
 
 _DC = PARAMS["dixon_coles"]
 DC_XI: float = _DC["xi"]
@@ -148,6 +158,113 @@ def add_lagged_rolling(long: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=[f"_lagged_{s}" for s in ROLLING_STATS])
 
 
+def _prior_matches_within(long: pd.DataFrame, days: int) -> pd.Series:
+    """Count each team's own prior matches falling within `days` before kickoff.
+
+    Leakage-safe by construction: only matches strictly earlier than the current
+    one are counted (the current row is excluded), and the team frame is already
+    sorted chronologically within team.
+    """
+    result = pd.Series(0.0, index=long.index)
+    for _, chunk in long.groupby("team", sort=False):
+        dates = chunk["date"].to_numpy()
+        window_start = dates - np.timedelta64(days, "D")
+        # First prior index whose date is still inside the window, per row.
+        first_in_window = np.searchsorted(dates, window_start, side="left")
+        result.loc[chunk.index] = np.arange(len(dates)) - first_in_window
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tier-1 engineered form: opponent-adjusted, venue-split, recency, standing
+# ---------------------------------------------------------------------------
+def add_derived_form(long: pd.DataFrame) -> pd.DataFrame:
+    """Engineered form features, all shift-then-roll or prior-matches-only.
+
+    Runs AFTER `attach_elo`, because strength-of-schedule and Elo
+    over-performance need each row's as-of-day-before Elo (and the opponent's).
+    Every quantity here is a property of matches strictly earlier than the one
+    being labelled, so the leakage guarantee is identical to `add_lagged_rolling`.
+    """
+    out = long.copy()
+
+    # --- Opponent's as-of Elo -------------------------------------------------
+    # A fixture's two rows share a match_id; a team's opponent Elo is simply the
+    # other row's Elo, which attach_elo already resolved to the day before
+    # kickoff -- so it is leakage-safe by the same argument.
+    opp = out[["match_id", "is_home", "elo"]].copy()
+    opp["is_home"] = 1 - opp["is_home"]
+    opp = opp.rename(columns={"elo": "opp_elo"})
+    out = out.merge(opp, on=["match_id", "is_home"], how="left")
+
+    # Per-match quantities (same-match values; lagged before they are used).
+    result_score = out["points"].map({3: 1.0, 1: 0.5, 0: 0.0})
+    elo_expectation = 1.0 / (1.0 + 10.0 ** ((out["opp_elo"] - out["elo"]) / 400.0))
+    out["_elo_perf"] = result_score - elo_expectation  # > 0 means beat the rating
+    out["_gd"] = out["goals_for"] - out["goals_against"]
+
+    out = out.sort_values(["team", "date", "match_id"], kind="stable").reset_index(drop=True)
+
+    # --- Strength of schedule + Elo over/under-performance (shift-then-roll) ---
+    team_grp = out.groupby("team", sort=False)
+    out["_lag_opp_elo"] = team_grp["opp_elo"].shift(1)
+    out["_lag_elo_perf"] = team_grp["_elo_perf"].shift(1)
+    out["_lag_points"] = team_grp["points"].shift(1)
+    lagged = out.groupby("team", sort=False)
+    for window in FORM_WINDOWS:
+        out[f"sos_r{window}"] = (
+            lagged["_lag_opp_elo"].rolling(window, min_periods=window).mean()
+            .reset_index(level=0, drop=True)
+        )
+        out[f"elo_perf_r{window}"] = (
+            lagged["_lag_elo_perf"].rolling(window, min_periods=window).mean()
+            .reset_index(level=0, drop=True)
+        )
+
+    # --- Venue-split form: prior matches at the SAME venue only ---------------
+    venue_grp = out.groupby(["team", "is_home"], sort=False)
+    out["_lag_points_venue"] = venue_grp["points"].shift(1)
+    out["_lag_gd_venue"] = venue_grp["_gd"].shift(1)
+    venue_lagged = out.groupby(["team", "is_home"], sort=False)
+    for window in FORM_WINDOWS:
+        out[f"points_venue_r{window}"] = (
+            venue_lagged["_lag_points_venue"].rolling(window, min_periods=window).mean()
+            .reset_index(level=[0, 1], drop=True)
+        )
+        out[f"gd_venue_r{window}"] = (
+            venue_lagged["_lag_gd_venue"].rolling(window, min_periods=window).mean()
+            .reset_index(level=[0, 1], drop=True)
+        )
+
+    # --- Recency-weighted form: EWMA of the lagged points series --------------
+    out["points_ewma"] = out.groupby("team", sort=False)["_lag_points"].transform(
+        lambda s: s.ewm(span=EWMA_SPAN, min_periods=1).mean()
+    )
+
+    # --- Fixture congestion ---------------------------------------------------
+    out[CONGESTION_COL] = _prior_matches_within(out, CONGESTION_DAYS)
+
+    # --- Points per game so far this season (prior matches only) --------------
+    season_grp = out.groupby(["team", "season"], sort=False)
+    prior_points = season_grp["points"].transform(lambda s: s.shift(1).cumsum())
+    prior_games = season_grp.cumcount()
+    out["ppg_season"] = prior_points / prior_games.replace(0, np.nan)
+
+    # --- Promoted-team flag: absent from this league the previous season ------
+    present = set(zip(out["league"], out["season"], out["team"], strict=True))
+    min_season = int(out["season"].min())
+    out["is_promoted"] = [
+        np.nan if season == min_season else float((league, season - 1, team) not in present)
+        for league, season, team in zip(out["league"], out["season"], out["team"], strict=True)
+    ]
+
+    temp = [
+        "opp_elo", "_elo_perf", "_gd", "_lag_opp_elo", "_lag_elo_perf",
+        "_lag_points", "_lag_points_venue", "_lag_gd_venue",
+    ]
+    return out.drop(columns=temp)
+
+
 # ---------------------------------------------------------------------------
 # Elo as of the day before kickoff
 # ---------------------------------------------------------------------------
@@ -230,6 +347,15 @@ def _feature_columns() -> list[str]:
     for stat in ROLLING_STATS:
         for window in FORM_WINDOWS:
             cols.append(f"{stat}_r{window}")
+    # Tier-1 engineered form (see add_derived_form).
+    for window in FORM_WINDOWS:
+        cols += [
+            f"sos_r{window}",
+            f"elo_perf_r{window}",
+            f"points_venue_r{window}",
+            f"gd_venue_r{window}",
+        ]
+    cols += ["points_ewma", CONGESTION_COL, "ppg_season", "is_promoted"]
     return cols
 
 
@@ -270,6 +396,20 @@ def pivot_to_wide(long: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
         wide[f"xg_overperformance_r{window}"] = (
             home_net_goals - home_net_xg
         ) - (away_net_goals - away_net_xg)
+
+    # --- Tier-1 engineered differentials ---------------------------------
+    for window in FORM_WINDOWS:
+        wide[f"points_venue_diff_r{window}"] = (
+            wide[f"home_points_venue_r{window}"] - wide[f"away_points_venue_r{window}"]
+        )
+        wide[f"elo_perf_diff_r{window}"] = (
+            wide[f"home_elo_perf_r{window}"] - wide[f"away_elo_perf_r{window}"]
+        )
+        wide[f"sos_diff_r{window}"] = wide[f"home_sos_r{window}"] - wide[f"away_sos_r{window}"]
+    wide["ppg_season_diff"] = wide["home_ppg_season"] - wide["away_ppg_season"]
+    wide[f"{CONGESTION_COL}_diff"] = (
+        wide[f"home_{CONGESTION_COL}"] - wide[f"away_{CONGESTION_COL}"]
+    )
 
     # --- Dixon-Coles differentials and standalone match probabilities -------
     wide["dc_attack_diff"] = wide["home_dc_attack"] - wide["away_dc_attack"]
@@ -357,6 +497,19 @@ def leakage_check(wide: pd.DataFrame, long: pd.DataFrame, n_samples: int = LEAKA
                 )
             checked += 1
 
+            # Venue-split form: re-derive from prior matches at the SAME venue
+            # only, guarding the (team, is_home) grouping in add_derived_form.
+            venue_prior = prior[prior["is_home"] == (1 if side == "home" else 0)]
+            if len(venue_prior) >= window:
+                expected_venue = venue_prior["points"].tail(window).mean()
+                actual_venue = getattr(row, f"{side}_points_venue_r{window}")
+                if pd.isna(actual_venue) or not np.isclose(expected_venue, actual_venue, atol=1e-9):
+                    failures.append(
+                        f"{row.match_id} {side}={team} venue: "
+                        f"pipeline={actual_venue!r} recomputed={expected_venue!r}"
+                    )
+                checked += 1
+
     if failures:
         for failure in failures[:10]:
             log.error("  LEAKAGE CHECK FAILED: %s", failure)
@@ -434,6 +587,8 @@ def build_feature_frame(
     long = attach_elo(long, elo)
     log.info("Elo coverage on team-matches: %.2f%%", 100 * long["elo"].notna().mean())
 
+    long = add_derived_form(long)
+
     long = attach_dixon_coles(long, dc_ratings)
     log.info(
         "Dixon-Coles coverage on team-matches: %.2f%%", 100 * long["dc_attack"].notna().mean()
@@ -496,7 +651,8 @@ def main() -> pd.DataFrame:
         c
         for c in wide.columns
         if c.startswith(
-            ("home_", "away_", "elo_", "points_diff", "xg_diff", "goal_diff", "xg_over", "rest_", "dc_")
+            ("home_", "away_", "elo_", "points_diff", "xg_diff", "goal_diff", "xg_over", "rest_", "dc_",
+             "points_venue_diff", "elo_perf_diff", "sos_diff", "ppg_", CONGESTION_COL)
         )
         and c not in ("home_team", "away_team")
     ]

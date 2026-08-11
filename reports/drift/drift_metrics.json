@@ -3,18 +3,18 @@
     2018,
     2019
   ],
-  "n_features_monitored": 32,
+  "n_features_monitored": 54,
   "thresholds": {
     "ks_alpha": 0.01,
     "psi": 0.2
   },
   "drifted_features_by_season": {
     "2020": 0,
-    "2021": 0,
-    "2022": 0,
-    "2023": 2,
-    "2024": 0,
-    "2025": 2
+    "2021": 2,
+    "2022": 2,
+    "2023": 6,
+    "2024": 4,
+    "2025": 6
   },
   "target_drift_seasons": [
     2020
@@ -23,7 +23,7 @@
     "track": "market_blind",
     "model": "logistic",
     "season": 2020,
-    "logloss_gap": 0.09440388850709758
+    "logloss_gap": 0.09515581748007962
   },
   "evidently_reports": [
     "/Users/aren/Desktop/UChicago Masters/Summer/ADSP 32021 Final Project/reports/drift/evidently_2020.html",
