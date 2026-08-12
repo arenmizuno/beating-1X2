@@ -59,6 +59,7 @@ class Champion:
 
     model: object
     version: str
+    model_semver: str
     run_id: str
     track: str
     algorithm: str
@@ -79,9 +80,10 @@ def load_champion() -> Champion:
     )
 
     log.info(
-        "loaded %s v%s (%s/%s, %d features)",
+        "loaded %s v%s (semver %s, %s/%s, %d features)",
         REGISTERED_MODEL_NAME,
         version.version,
+        contract["model_semver"],
         contract["track"],
         contract["model"],
         len(contract["feature_columns"]),
@@ -91,6 +93,7 @@ def load_champion() -> Champion:
         # MLflow hands back an int here; every consumer treats registry versions
         # as opaque labels, so normalize to str once at the boundary.
         version=str(version.version),
+        model_semver=contract["model_semver"],
         run_id=version.run_id,
         track=contract["track"],
         algorithm=contract["model"],
@@ -196,6 +199,7 @@ def score_fixtures(
     result["best_edge"] = edges[np.arange(len(edges)), best]
     result["value_flag"] = result["best_edge"] > threshold
     result["model_version"] = champion.version
+    result["model_semver"] = champion.model_semver
     result["model_track"] = champion.track
 
     log.info(

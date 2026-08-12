@@ -117,6 +117,7 @@ class HealthResponse(BaseModel):
     status: str
     model_name: str
     model_version: str | None = None
+    model_semver: str | None = None
     model_alias: str
     uptime_seconds: float
     detail: str | None = None
@@ -125,6 +126,7 @@ class HealthResponse(BaseModel):
 class ModelInfo(BaseModel):
     name: str
     version: str
+    model_semver: str
     alias: str
     run_id: str
     track: str
@@ -155,6 +157,7 @@ class PredictResponse(BaseModel):
     model_config = {"protected_namespaces": ()}
 
     model_version: str
+    model_semver: str
     predictions: list[Prediction]
 
 
@@ -185,6 +188,7 @@ class UpcomingResponse(BaseModel):
 
     n_fixtures: int
     model_version: str | None = None
+    model_semver: str | None = None
     benchmark: str
     note: str | None = None
     predictions: list[FixturePrediction] = []
@@ -246,6 +250,7 @@ def health() -> HealthResponse:
         status="ok" if champion else "degraded",
         model_name=REGISTERED_MODEL_NAME,
         model_version=champion.version if champion else None,
+        model_semver=champion.model_semver if champion else None,
         model_alias=CHAMPION_ALIAS,
         uptime_seconds=round(time.time() - STATE["started_at"], 1),
         detail=None if champion else STATE.get("error", "model not loaded"),
@@ -258,6 +263,7 @@ def model_info() -> ModelInfo:
     return ModelInfo(
         name=REGISTERED_MODEL_NAME,
         version=champion.version,
+        model_semver=champion.model_semver,
         alias=CHAMPION_ALIAS,
         run_id=champion.run_id,
         track=champion.track,
@@ -295,6 +301,7 @@ def predict(request: PredictRequest) -> PredictResponse:
     STATE["counters"]["predict"] += 1
     return PredictResponse(
         model_version=champion.version,
+        model_semver=champion.model_semver,
         predictions=[
             Prediction(p_home=float(p[0]), p_draw=float(p[1]), p_away=float(p[2]))
             for p in proba
@@ -324,6 +331,7 @@ def predict_matches(request: MatchRequest) -> UpcomingResponse:
     return UpcomingResponse(
         n_fixtures=len(scored),
         model_version=champion.version,
+        model_semver=champion.model_semver,
         benchmark="historical closing odds (the benchmark the model was evaluated against)",
         predictions=_to_fixture_predictions(scored) if not scored.empty else [],
     )
@@ -347,6 +355,7 @@ def predict_upcoming(threshold: float = EDGE_THRESHOLD) -> UpcomingResponse:
         return UpcomingResponse(
             n_fixtures=0,
             model_version=champion.version,
+            model_semver=champion.model_semver,
             benchmark="live pre-match odds (softer than the closing line used in backtesting)",
             note=(
                 "No upcoming fixtures in the top-5 European leagues. These "
@@ -363,6 +372,7 @@ def predict_upcoming(threshold: float = EDGE_THRESHOLD) -> UpcomingResponse:
     return UpcomingResponse(
         n_fixtures=len(scored),
         model_version=champion.version,
+        model_semver=champion.model_semver,
         benchmark="live pre-match odds (softer than the closing line used in backtesting)",
         note=(
             "Value flags compare against a pre-match price, not a closing price. "
@@ -381,6 +391,7 @@ def metrics() -> dict:
         "uptime_seconds": round(time.time() - STATE["started_at"], 1),
         "model_loaded": champion is not None,
         "model_version": champion.version if champion else None,
+        "model_semver": champion.model_semver if champion else None,
         "requests": STATE["counters"],
         "outcomes": OUTCOMES,
     }

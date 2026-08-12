@@ -54,6 +54,7 @@ stages:
     cmd: python -m src.harmonize
     deps:
       - src/harmonize.py
+      - src/config.py
       - data/interim/footballdata.parquet
       - data/interim/understat.parquet
       - data/interim/clubelo.parquet
@@ -71,6 +72,7 @@ stages:
     cmd: python -m src.market
     deps:
       - src/market.py
+      - src/config.py
       - data/interim/matches.parquet
     params:
       - market
@@ -81,11 +83,14 @@ stages:
     cmd: python -m src.features
     deps:
       - src/features.py
+      - src/config.py
+      - src/dixon_coles.py
       - data/interim/matches.parquet
       - data/interim/market.parquet
       - data/interim/clubelo_canonical.parquet
     params:
       - features
+      - dixon_coles
     outs:
       - data/processed/features.parquet
 
@@ -93,14 +98,24 @@ stages:
     cmd: python -m src.train
     deps:
       - src/train.py
+      - src/config.py
       - src/splits.py
       - src/metrics.py
       - data/processed/features.parquet
+      - reports/lightgbm_search_market_blind.csv
+      - reports/lightgbm_search_market_aware.csv
+      - reports/xgboost_search_market_blind.csv
+      - reports/xgboost_search_market_aware.csv
+      - reports/catboost_search_market_blind.csv
+      - reports/catboost_search_market_aware.csv
     params:
       - train
       - split
       - holdout_season
       - seed
+      - leagues
+      - model_semver
+      - evaluate.calibration_bins
     outs:
       - data/processed/predictions.parquet
     metrics:
@@ -111,6 +126,7 @@ stages:
     cmd: python -m src.evaluate
     deps:
       - src/evaluate.py
+      - src/config.py
       - src/metrics.py
       - data/processed/predictions.parquet
     params:
@@ -132,6 +148,8 @@ stages:
     cmd: python -m src.drift
     deps:
       - src/drift.py
+      - src/config.py
+      - src/metrics.py
       - data/processed/features.parquet
       - data/processed/predictions.parquet
     outs:

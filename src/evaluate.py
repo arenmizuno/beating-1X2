@@ -249,55 +249,52 @@ def bootstrap_roi(
 
 def backtest(predictions: pd.DataFrame, threshold: float = EDGE_THRESHOLD) -> pd.DataFrame:
     rows = []
-    for (track, model), chunk in predictions.groupby(["track", "model"]):
-        for scope, subset in (
-            ("walk_forward", chunk[~chunk["fold"].str.startswith("holdout")]),
-            ("holdout", chunk[chunk["fold"].str.startswith("holdout")]),
-        ):
-            for mode in ("absolute", "relative"):
-                bets = flag_value_bets(subset, threshold, mode=mode)
-                if bets.empty:
-                    rows.append(
-                        {
-                            "track": track,
-                            "model": model,
-                            "scope": scope,
-                            "mode": mode,
-                            "n_bets": 0,
-                        }
-                    )
-                    continue
-
-                flat_roi, flat_lo, flat_hi = bootstrap_roi(
-                    bets["flat_profit"].to_numpy(), bets["flat_stake"].to_numpy()
-                )
-                kelly_roi, kelly_lo, kelly_hi = bootstrap_roi(
-                    bets["kelly_profit"].to_numpy(), bets["kelly_stake"].to_numpy()
-                )
-                clv = bets["clv"].dropna()
-
+    walk_forward = predictions[~predictions["fold"].str.startswith("holdout")]
+    for (track, model), subset in walk_forward.groupby(["track", "model"]):
+        for mode in ("absolute", "relative"):
+            bets = flag_value_bets(subset, threshold, mode=mode)
+            if bets.empty:
                 rows.append(
                     {
                         "track": track,
                         "model": model,
-                        "scope": scope,
+                        "scope": "walk_forward",
                         "mode": mode,
-                        "n_bets": len(bets),
-                        "bet_rate": len(bets) / len(subset),
-                        "mean_odds": bets["odds"].mean(),
-                        "mean_edge": bets["edge"].mean(),
-                        "strike_rate": bets["won"].mean(),
-                        "flat_roi": flat_roi,
-                        "flat_roi_lo": flat_lo,
-                        "flat_roi_hi": flat_hi,
-                        "flat_profit_units": bets["flat_profit"].sum(),
-                        "kelly_roi": kelly_roi,
-                        "kelly_roi_lo": kelly_lo,
-                        "kelly_roi_hi": kelly_hi,
-                        "mean_clv": clv.mean() if len(clv) else float("nan"),
-                        "positive_clv_rate": (clv > 0).mean() if len(clv) else float("nan"),
+                        "n_bets": 0,
                     }
                 )
+                continue
+
+            flat_roi, flat_lo, flat_hi = bootstrap_roi(
+                bets["flat_profit"].to_numpy(), bets["flat_stake"].to_numpy()
+            )
+            kelly_roi, kelly_lo, kelly_hi = bootstrap_roi(
+                bets["kelly_profit"].to_numpy(), bets["kelly_stake"].to_numpy()
+            )
+            clv = bets["clv"].dropna()
+
+            rows.append(
+                {
+                    "track": track,
+                    "model": model,
+                    "scope": "walk_forward",
+                    "mode": mode,
+                    "n_bets": len(bets),
+                    "bet_rate": len(bets) / len(subset),
+                    "mean_odds": bets["odds"].mean(),
+                    "mean_edge": bets["edge"].mean(),
+                    "strike_rate": bets["won"].mean(),
+                    "flat_roi": flat_roi,
+                    "flat_roi_lo": flat_lo,
+                    "flat_roi_hi": flat_hi,
+                    "flat_profit_units": bets["flat_profit"].sum(),
+                    "kelly_roi": kelly_roi,
+                    "kelly_roi_lo": kelly_lo,
+                    "kelly_roi_hi": kelly_hi,
+                    "mean_clv": clv.mean() if len(clv) else float("nan"),
+                    "positive_clv_rate": (clv > 0).mean() if len(clv) else float("nan"),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -411,7 +408,6 @@ def plot_roi_curve(sweep: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 def write_summary(comparison: pd.DataFrame, bets: pd.DataFrame) -> None:
     walk_forward = comparison[~comparison["fold"].str.startswith("holdout")]
-    holdout = comparison[comparison["fold"].str.startswith("holdout")]
 
     wf_mean = (
         walk_forward.groupby(["track", "model"])[
@@ -447,22 +443,11 @@ def write_summary(comparison: pd.DataFrame, bets: pd.DataFrame) -> None:
         f"**Market baseline: {walk_forward['market_log_loss'].mean():.4f} log loss. "
         f"Dixon-Coles baseline: {walk_forward['dc_log_loss'].mean():.4f} log loss.**",
         "",
-        "## 2. Holdout season (" + season_label(HOLDOUT_SEASON) + ", never used in training)",
+        "## 2. Production holdout validation",
         "",
-        holdout[
-            [
-                "track",
-                "model",
-                "n",
-                "model_log_loss",
-                "market_log_loss",
-                "dc_log_loss",
-                "logloss_gap",
-                "dc_logloss_gap",
-            ]
-        ]
-        .round(4)
-        .to_markdown(index=False),
+        "The " + season_label(HOLDOUT_SEASON) + " holdout is intentionally absent from training",
+        "artifacts. Its single champion evaluation is produced only through the deployed API by",
+        "`python -m src.stress_test` and recorded in `reports/drift/stress_test.json`.",
         "",
         "## 3. Value-bet backtest",
         "",

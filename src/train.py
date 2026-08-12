@@ -58,6 +58,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import re
 import warnings
 
 import mlflow
@@ -106,7 +107,15 @@ CALIBRATION_METHOD: str = _T["calibration_method"]
 PROBABILITY_FLOOR: float = _T["probability_floor"]
 EXPERIMENT_NAME: str = _T["mlflow_experiment"]
 STACKING_BASE_MODELS: list[str] = _T["stacking_base_models"]
+REUSE_SEARCH_RESULTS: bool = _T.get("reuse_search_results", False)
 N_BINS: int = PARAMS["evaluate"]["calibration_bins"]
+MODEL_SEMVER: str = PARAMS["model_semver"]
+
+SEMVER_PATTERN = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 MARKET_FEATURES = [f"p_market_{o}" for o in OUTCOMES]
 DC_FEATURES = [f"dc_p_{o}" for o in OUTCOMES]
@@ -350,10 +359,12 @@ def run_fold(
     (same algorithm, tuned hyperparameters via `overrides`) is tracked as its
     own configuration.
 
-    Returns the fitted (calibrated) estimator alongside the metrics so the
-    holdout fold's model -- the one trained on the most data, and therefore the
-    one worth deploying -- can be registered without refitting.
+    Returns the fitted estimator alongside the metrics for diagnostics.
+    Holdout scoring is prohibited here; the sealed test season is evaluated
+    only through the deployed API.
     """
+    if split.name.startswith("holdout"):
+        raise ValueError("run_fold cannot score the sealed holdout; use deployed API validation")
     cols = feature_columns(features, track)
     train, evaluation = split.apply(features)
     algorithm = model_name[: -len("_tuned")] if model_name.endswith("_tuned") else model_name
@@ -505,6 +516,28 @@ def tune_lightgbm(
     return tune_model(features, track, folds, "lightgbm", n_trials, search_space)
 
 
+def load_search_result(
+    path, search_space: dict
+) -> tuple[dict, pd.DataFrame]:
+    """Load the audited winning trial from a committed search artifact."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"search artifact {path} is missing; set train.reuse_search_results=false "
+            "and rerun training to regenerate it"
+        )
+    trials = pd.read_csv(path).sort_values("mean_wf_log_loss").reset_index(drop=True)
+    expected = {key for key in search_space if key != "n_trials"}
+    missing = expected - set(trials.columns)
+    if missing or trials.empty:
+        raise ValueError(f"invalid search artifact {path}: missing columns {sorted(missing)}")
+    best = trials.iloc[0]
+    params = {
+        key: (int(best[key]) if key in _INTEGER_HYPERPARAMS else float(best[key]))
+        for key in expected
+    }
+    return params, trials
+
+
 # ---------------------------------------------------------------------------
 # Stacking ensemble (walk-forward folds only, meta-learner on its own slice)
 # ---------------------------------------------------------------------------
@@ -546,27 +579,10 @@ class StackingEnsemble:
         return np.argmax(self.predict_proba(X), axis=1)
 
 
-def run_fold_stacking(
-    features: pd.DataFrame, split: Split, track: str
-) -> tuple[pd.DataFrame, dict[str, float], dict[str, float], object]:
-    """Stack the calibrated base models in STACKING_BASE_MODELS via a meta-learner.
-
-    Three temporally disjoint slices of the training window (`stacking_split`):
-    fit_seasons trains the base models, calib_seasons calibrates them
-    (identical to `fit_calibrated`), and meta_seasons -- seen by neither the
-    base models nor their calibrators -- trains the meta-learner. Training the
-    meta-learner on calib_seasons instead would double-dip the exact
-    in-sample-confidence problem calibration is meant to avoid one level up.
-
-    Raises ValueError (propagated from `stacking_split`) on folds whose
-    training window is too short for a three-way split; callers should skip
-    and log those folds rather than treating the error as fatal.
-    """
-    cols = feature_columns(features, track)
-    train, evaluation = split.apply(features)
-    if track == "market_aware":
-        train = train.dropna(subset=MARKET_FEATURES)
-
+def fit_stacking(
+    train: pd.DataFrame, cols: list[str], split: Split
+) -> StackingEnsemble:
+    """Fit the stacking ensemble using only the split's training seasons."""
     fit_seasons, calib_seasons, meta_seasons = stacking_split(split.train_seasons)
     fit_rows = train[train["season"].isin(fit_seasons)]
     calib_rows = train[train["season"].isin(calib_seasons)]
@@ -583,12 +599,42 @@ def run_fold_stacking(
         base_models[name] = calibrated
 
     meta_design = np.hstack(
-        [base_models[name].predict_proba(make_design(meta_rows, cols)) for name in STACKING_BASE_MODELS]
+        [
+            base_models[name].predict_proba(make_design(meta_rows, cols))
+            for name in STACKING_BASE_MODELS
+        ]
     )
     meta_model = LogisticRegression(max_iter=2000, random_state=SEED)
     meta_model.fit(meta_design, meta_rows["target"].to_numpy())
+    return StackingEnsemble(base_models, meta_model, cols, STACKING_BASE_MODELS)
 
-    ensemble = StackingEnsemble(base_models, meta_model, cols, STACKING_BASE_MODELS)
+
+def run_fold_stacking(
+    features: pd.DataFrame, split: Split, track: str
+) -> tuple[pd.DataFrame, dict[str, float], dict[str, float], object]:
+    """Stack the calibrated base models in STACKING_BASE_MODELS via a meta-learner.
+
+    Three temporally disjoint slices of the training window (`stacking_split`):
+    fit_seasons trains the base models, calib_seasons calibrates them
+    (identical to `fit_calibrated`), and meta_seasons -- seen by neither the
+    base models nor their calibrators -- trains the meta-learner. Training the
+    meta-learner on calib_seasons instead would double-dip the exact
+    in-sample-confidence problem calibration is meant to avoid one level up.
+
+    Raises ValueError (propagated from `stacking_split`) on folds whose
+    training window is too short for a three-way split; callers should skip
+    and log those folds rather than treating the error as fatal.
+    """
+    if split.name.startswith("holdout"):
+        raise ValueError(
+            "run_fold_stacking cannot score the sealed holdout; use deployed API validation"
+        )
+    cols = feature_columns(features, track)
+    train, evaluation = split.apply(features)
+    if track == "market_aware":
+        train = train.dropna(subset=MARKET_FEATURES)
+
+    ensemble = fit_stacking(train, cols, split)
 
     scored = evaluation.dropna(subset=MARKET_FEATURES).copy()
     proba, n_floored = apply_probability_floor(ensemble.predict_proba(make_design(scored, cols)))
@@ -642,32 +688,77 @@ def _mlflow_model_params(model_name: str, overrides: dict | None) -> dict:
     return {}
 
 
+def validate_model_semver(value: str) -> str:
+    """Validate the configured semantic version before creating registry state."""
+    if not SEMVER_PATTERN.fullmatch(value):
+        raise ValueError(
+            f"model_semver must be a valid semantic version (MAJOR.MINOR.PATCH); got {value!r}"
+        )
+    return value
+
+
+def assert_semver_available(client: MlflowClient, semver: str) -> None:
+    """Reject reuse of a release identifier across distinct registry versions."""
+    validate_model_semver(semver)
+    existing = client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'")
+    for version in existing:
+        tags = getattr(version, "tags", {}) or {}
+        if tags.get("model_semver") == semver:
+            raise ValueError(
+                f"model_semver {semver} is already assigned to MLflow model version "
+                f"{version.version}; bump model_semver before registering a new release"
+            )
+
+
+def select_champion(
+    wf_summary: dict[tuple[str, str], dict[str, float]],
+) -> tuple[str, str]:
+    """Choose a champion using walk-forward log loss and no holdout evidence."""
+    if not wf_summary:
+        raise ValueError("cannot select a champion from an empty walk-forward summary")
+    return min(wf_summary, key=lambda key: wf_summary[key]["wf_log_loss"])
+
+
+def fit_deployment_model(
+    features: pd.DataFrame,
+    track: str,
+    model_name: str,
+    overrides: dict | None,
+) -> tuple[object, list[str], list[int]]:
+    """Fit the selected model without inspecting or scoring holdout rows."""
+    deployment_split = holdout_split()
+    train = features[features["season"].isin(deployment_split.train_seasons)].copy()
+    if track == "market_aware":
+        train = train.dropna(subset=MARKET_FEATURES)
+
+    cols = feature_columns(features, track)
+    if model_name == "stacking":
+        fitted = fit_stacking(train, cols, deployment_split)
+    else:
+        algorithm = model_name[: -len("_tuned")] if model_name.endswith("_tuned") else model_name
+        fitted, _, _ = fit_calibrated(algorithm, train, cols, deployment_split, overrides)
+    return fitted, cols, list(deployment_split.train_seasons)
+
+
 def main() -> pd.DataFrame:
     ensure_dirs()
     MLRUNS_DIR.mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(MLRUNS_DIR.as_uri())
     mlflow.set_experiment(EXPERIMENT_NAME)
+    validate_model_semver(MODEL_SEMVER)
+    assert_semver_available(MlflowClient(), MODEL_SEMVER)
 
     features = pd.read_parquet(FEATURES_PATH)
     log.info("loaded %d feature rows, %d columns", len(features), features.shape[1])
 
     wf_folds = walk_forward_splits()
-    folds = wf_folds + [holdout_split()]
-    log.info("running %d folds (%d walk-forward + 1 holdout)", len(folds), len(folds) - 1)
+    log.info("running %d walk-forward folds; holdout remains sealed", len(wf_folds))
 
-    # "stacking" needs 3 training seasons (fit + calibration + meta); the
-    # earliest walk-forward fold may not have that many. Champion selection
-    # must compare every candidate over the SAME walk-forward folds -- scoring
-    # configurations on different subsets would let one that skips a hard fold
-    # (here, the 2020 COVID season) look artificially strong. This is exactly
-    # the unfair comparison run_fold's own docstring warns against one level
-    # up (model vs market scored on identical rows only); it applies model vs
-    # model here. `common_wf_names` is the set every candidate, including
-    # stacking, can actually cover.
+    # Stacking needs three training seasons, so champion selection uses only the
+    # folds common to every candidate. This existing policy is intentionally
+    # unchanged by the holdout-isolation refactor.
     common_wf_names = {
-        split.name
-        for split in wf_folds
-        if _stacking_split_ok(split.train_seasons)
+        split.name for split in wf_folds if _stacking_split_ok(split.train_seasons)
     }
     if len(common_wf_names) < len(wf_folds):
         log.warning(
@@ -679,10 +770,8 @@ def main() -> pd.DataFrame:
         )
 
     all_predictions = []
-    # Keyed by (track, model): walk-forward scores drive champion selection,
-    # holdout run ids point at the persisted model artifact to register.
     wf_summary: dict[tuple[str, str], dict[str, float]] = {}
-    holdout_runs: dict[tuple[str, str], dict] = {}
+    config_overrides: dict[tuple[str, str], dict | None] = {}
 
     for track in TRACKS:
         cols = feature_columns(features, track)
@@ -691,20 +780,22 @@ def main() -> pd.DataFrame:
         for model_name in MODELS:
             overrides: dict | None = None
             if model_name.endswith("_tuned"):
-                # Tuned ONCE per (track, algorithm), scored on walk-forward folds
-                # only -- never `folds` (which appends the holdout).
                 algorithm = model_name[: -len("_tuned")]
                 search_space = _T[f"{algorithm}_search"]
-                overrides, search_trials = tune_model(
-                    features,
-                    track,
-                    walk_forward_splits(),
-                    algorithm,
-                    search_space["n_trials"],
-                    search_space,
-                )
                 search_path = REPORTS_DIR / f"{algorithm}_search_{track}.csv"
-                search_trials.to_csv(search_path, index=False)
+                if REUSE_SEARCH_RESULTS:
+                    overrides, search_trials = load_search_result(search_path, search_space)
+                    log.info("reusing audited search artifact %s", search_path)
+                else:
+                    overrides, search_trials = tune_model(
+                        features,
+                        track,
+                        wf_folds,
+                        algorithm,
+                        search_space["n_trials"],
+                        search_space,
+                    )
+                    search_trials.to_csv(search_path, index=False)
                 log.info("track=%s %s best: %s", track, model_name, overrides)
                 with mlflow.start_run(run_name=f"{track}__{model_name}_search"):
                     mlflow.log_params(
@@ -715,6 +806,7 @@ def main() -> pd.DataFrame:
                     )
                     mlflow.log_artifact(str(search_path))
 
+            config_overrides[(track, model_name)] = overrides
             model_params = _mlflow_model_params(model_name, overrides)
 
             with mlflow.start_run(run_name=f"{track}__{model_name}"):
@@ -728,30 +820,27 @@ def main() -> pd.DataFrame:
                         **model_params,
                     }
                 )
-
                 fold_scores_by_name: dict[str, dict] = {}
                 market_scores_by_name: dict[str, dict] = {}
 
-                for split in folds:
+                for split in wf_folds:
                     if model_name == "stacking":
                         try:
-                            predictions, model_metrics, market_metrics, fitted = run_fold_stacking(
+                            predictions, model_metrics, market_metrics, _ = run_fold_stacking(
                                 features, split, track
                             )
                         except ValueError as exc:
                             log.info("  skipping stacking on %s: %s", split.name, exc)
                             continue
                     else:
-                        predictions, model_metrics, market_metrics, fitted = run_fold(
+                        predictions, model_metrics, market_metrics, _ = run_fold(
                             features, split, track, model_name, overrides
                         )
                     all_predictions.append(predictions)
                     fold_scores_by_name[split.name] = model_metrics
                     market_scores_by_name[split.name] = market_metrics
 
-                    is_holdout = split.name.startswith("holdout")
-                    prefix = "holdout" if is_holdout else f"fold_{split.eval_seasons[0]}"
-                    with mlflow.start_run(run_name=split.name, nested=True) as fold_run:
+                    with mlflow.start_run(run_name=split.name, nested=True):
                         mlflow.log_params(
                             {
                                 "train_seasons": str(list(split.train_seasons)),
@@ -760,60 +849,10 @@ def main() -> pd.DataFrame:
                         )
                         mlflow.log_metrics({f"model_{k}": v for k, v in model_metrics.items()})
                         mlflow.log_metrics({f"market_{k}": v for k, v in market_metrics.items()})
-
-                        # Persist the holdout model: it is trained on every
-                        # development season, so it is the one that would
-                        # actually be deployed. Earlier folds exist to measure,
-                        # not to serve, and logging all of them would bloat the
-                        # store for no benefit.
-                        if is_holdout:
-                            sample = make_design(features.head(5), cols)
-                            signature = infer_signature(sample, fitted.predict_proba(sample))
-                            # Explicit cloudpickle: mlflow's default "skops"
-                            # serialization refuses to load any type it does not
-                            # already recognize, which includes StackingEnsemble
-                            # -- verified to fail loudly ("untrusted types") with
-                            # skops and to round-trip correctly with cloudpickle.
-                            # Applied to every model, not just stacking, so there
-                            # is one serialization path for the whole registry.
-                            mlflow.sklearn.log_model(
-                                fitted,
-                                artifact_path=MODEL_ARTIFACT_PATH,
-                                signature=signature,
-                                input_example=sample,
-                                serialization_format="cloudpickle",
-                            )
-                            # The serving layer must rebuild the design matrix in
-                            # exactly this column order, so the feature list
-                            # travels WITH the model rather than being re-derived
-                            # from a params file that may have moved on.
-                            mlflow.log_dict(
-                                {
-                                    "track": track,
-                                    "model": model_name,
-                                    "feature_columns": cols,
-                                    "design_columns": list(sample.columns),
-                                    "train_seasons": list(split.train_seasons),
-                                    "probability_floor": PROBABILITY_FLOOR,
-                                },
-                                "model_contract.json",
-                            )
-                            holdout_runs[(track, model_name)] = {
-                                "run_id": fold_run.info.run_id,
-                                "model_metrics": model_metrics,
-                                "market_metrics": market_metrics,
-                                "feature_columns": cols,
-                                "train_seasons": list(split.train_seasons),
-                            }
-
                     mlflow.log_metrics(
-                        {f"{prefix}_{k}": v for k, v in model_metrics.items()}
+                        {f"fold_{split.eval_seasons[0]}_{k}": v for k, v in model_metrics.items()}
                     )
 
-                # Walk-forward means for champion selection use ONLY the folds
-                # common to every candidate in this track (common_wf_names) --
-                # never a config-specific subset. The holdout is reported alone,
-                # never averaged in.
                 wf_model = pd.DataFrame(
                     [fold_scores_by_name[name] for name in common_wf_names]
                 ).mean()
@@ -825,15 +864,6 @@ def main() -> pd.DataFrame:
                 mlflow.log_metric(
                     "wf_logloss_vs_market", wf_model["log_loss"] - wf_market["log_loss"]
                 )
-
-                log.info(
-                    "%s/%s walk-forward mean: logloss %.4f vs market %.4f (%+.4f)",
-                    track,
-                    model_name,
-                    wf_model["log_loss"],
-                    wf_market["log_loss"],
-                    wf_model["log_loss"] - wf_market["log_loss"],
-                )
                 wf_summary[(track, model_name)] = {
                     "wf_log_loss": float(wf_model["log_loss"]),
                     "wf_market_log_loss": float(wf_market["log_loss"]),
@@ -841,16 +871,65 @@ def main() -> pd.DataFrame:
                 }
 
     predictions = pd.concat(all_predictions, ignore_index=True)
+    if predictions["fold"].str.startswith("holdout").any():
+        raise AssertionError("training predictions must never contain holdout rows")
     predictions.to_parquet(PREDICTIONS_PATH, index=False)
-    log.info("wrote %s (%d prediction rows)", PREDICTIONS_PATH, len(predictions))
+    log.info("wrote %s (%d walk-forward prediction rows)", PREDICTIONS_PATH, len(predictions))
 
-    register_champion(wf_summary, holdout_runs)
+    best_key = select_champion(wf_summary)
+    track, model_name = best_key
+    fitted, cols, train_seasons = fit_deployment_model(
+        features, track, model_name, config_overrides[best_key]
+    )
+    sample_rows = features[features["season"].isin(train_seasons)].head(5)
+    sample = make_design(sample_rows, cols)
+
+    with mlflow.start_run(run_name=f"deployment__{track}__{model_name}") as deployment_run:
+        mlflow.log_params(
+            {
+                "track": track,
+                "model": model_name,
+                "model_semver": MODEL_SEMVER,
+                "n_features": len(cols),
+                "calibration": CALIBRATION_METHOD,
+                "seed": SEED,
+                **_mlflow_model_params(model_name, config_overrides[best_key]),
+            }
+        )
+        signature = infer_signature(sample, fitted.predict_proba(sample))
+        mlflow.sklearn.log_model(
+            fitted,
+            artifact_path=MODEL_ARTIFACT_PATH,
+            signature=signature,
+            input_example=sample,
+            serialization_format="cloudpickle",
+        )
+        mlflow.log_dict(
+            {
+                "track": track,
+                "model": model_name,
+                "model_semver": MODEL_SEMVER,
+                "feature_columns": cols,
+                "design_columns": list(sample.columns),
+                "train_seasons": train_seasons,
+                "probability_floor": PROBABILITY_FLOOR,
+            },
+            "model_contract.json",
+        )
+        run_info = {
+            "run_id": deployment_run.info.run_id,
+            "feature_columns": cols,
+            "train_seasons": train_seasons,
+        }
+
+    register_champion(wf_summary, best_key, run_info)
     return predictions
 
 
 def register_champion(
     wf_summary: dict[tuple[str, str], dict[str, float]],
-    holdout_runs: dict[tuple[str, str], dict],
+    best_key: tuple[str, str],
+    run_info: dict,
 ) -> None:
     """Promote the best configuration to the MLflow Model Registry.
 
@@ -862,9 +941,9 @@ def register_champion(
     rather than implicit: which configuration won, by how much, and how it
     compares to the market baseline it still loses to.
     """
-    best_key = min(wf_summary, key=lambda k: wf_summary[k]["wf_log_loss"])
+    if best_key != select_champion(wf_summary):
+        raise ValueError("best_key does not match walk-forward champion selection")
     track, model_name = best_key
-    run_info = holdout_runs[best_key]
 
     log.info(
         "champion: %s/%s (walk-forward log loss %.4f, market %.4f)",
@@ -875,6 +954,7 @@ def register_champion(
     )
 
     client = MlflowClient()
+    assert_semver_available(client, MODEL_SEMVER)
     model_uri = f"runs:/{run_info['run_id']}/{MODEL_ARTIFACT_PATH}"
     version = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
 
@@ -888,6 +968,7 @@ def register_champion(
         "track": track,
         "algorithm": model_name,
         "calibration": CALIBRATION_METHOD,
+        "model_semver": MODEL_SEMVER,
         "selected_by": "walk_forward_mean_log_loss",
         "beats_market": str(wf_summary[best_key]["wf_gap"] < 0),
     }.items():
@@ -896,6 +977,7 @@ def register_champion(
     champion = {
         "registered_model": REGISTERED_MODEL_NAME,
         "version": version.version,
+        "model_semver": MODEL_SEMVER,
         "alias": CHAMPION_ALIAS,
         "run_id": run_info["run_id"],
         "track": track,
@@ -904,17 +986,14 @@ def register_champion(
         "train_seasons": run_info["train_seasons"],
         "n_features": len(run_info["feature_columns"]),
         "walk_forward": wf_summary[best_key],
-        "holdout": {
-            "model": run_info["model_metrics"],
-            "market": run_info["market_metrics"],
-        },
         "all_configurations": {f"{t}/{m}": v for (t, m), v in wf_summary.items()},
     }
     CHAMPION_PATH.write_text(json.dumps(champion, indent=2))
     log.info(
-        "registered %s v%s as @%s -- see %s",
+        "registered %s v%s (semver %s) as @%s -- see %s",
         REGISTERED_MODEL_NAME,
         version.version,
+        MODEL_SEMVER,
         CHAMPION_ALIAS,
         CHAMPION_PATH,
     )

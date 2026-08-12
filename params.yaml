@@ -6,6 +6,11 @@
 
 seed: 42
 
+# Release identifier for the registered model artifact. MLflow assigns its own
+# integer registry version; this semantic version describes the model contract
+# and must be bumped intentionally before registering a materially new release.
+model_semver: "1.0.0"
+
 # ---------------------------------------------------------------------------
 # Scope
 # ---------------------------------------------------------------------------
@@ -168,6 +173,11 @@ dixon_coles:
 # Models
 # ---------------------------------------------------------------------------
 train:
+  # The committed search tables under reports/ are audited experiment artifacts.
+  # Normal pipeline reproduction reuses their winning hyperparameters; set false
+  # only when intentionally rerunning the full 150-trial search campaign.
+  reuse_search_results: true
+
   # Two tracks. Track A never sees market prices and is the only one that can be
   # honestly compared against the market. Track B adds the vig-free market
   # probability as a feature, testing whether our signal adds anything the

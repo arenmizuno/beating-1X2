@@ -296,9 +296,9 @@ noise-mining. Every economic figure carries a bootstrap CI.
 ### The model is swappable by design
 
 Nothing downstream names an algorithm. `src/train.py` registers the best
-configuration — selected by **walk-forward** mean log loss, never by holdout
-performance, which would turn the untouched test season into a selection set —
-to the MLflow Model Registry as `beating-1x2` with a `@champion` alias. A
+configuration — selected by **walk-forward** mean log loss without scoring the
+holdout — to the MLflow Model Registry as `beating-1x2` with a `@champion`
+alias. The sealed test season is first scored later through the deployed API. A
 `model_contract.json` artifact travels with the model carrying its feature list
 and exact design-matrix column order.
 
@@ -389,6 +389,12 @@ like orchestrators. They do different jobs:
 ```bash
 dvc repro
 ```
+
+The six committed hyperparameter-search tables are audited training inputs and
+are reused by default (`train.reuse_search_results: true`). Set that parameter
+to `false` when intentionally rerunning the full Optuna search; the selected
+parameters are still evaluated solely on walk-forward folds.
+
 ```bash
 python flows.py            # full pipeline
 ```
@@ -418,13 +424,14 @@ scored worse is model decay.
 
 `src/drift.py` detects a *real* historical shift. `src/stress_test.py` does the
 complementary thing: it validates a serving baseline, then injects **known
-faults** and confirms the monitor catches each. It scores the clean holdout
-through the deployed API (`API_URL`), or the identical in-process path if no
-server is up, then re-scores three corrupted copies:
+faults** and confirms the monitor catches each. It scores the complete clean
+holdout through the deployed API (`API_URL`, defaulting to localhost) and fails
+closed if the service is unavailable, then re-scores three corrupted copies.
+An explicit `--in-process` mode exists only for tests and local diagnostics:
 
 | Fault | Corruption | Caught by |
 |---|---|---|
-| `out_of_bounds` | every feature pushed far past its range | 84/86 features drift (KS+PSI), prediction PSI 12.5 |
+| `out_of_bounds` | every feature pushed far past its range | 84/86 features drift (KS+PSI), prediction PSI 10.71 |
 | `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.40 — **performance**, not input drift (only 13/86 marginals move) |
 | `schema_break` | the xG feature family dropped | 12 missing features — **schema**, though log loss barely moves |
 
@@ -440,7 +447,7 @@ python -m src.stress_test --api-url http://localhost:8000
 
 ### Tests and CI
 
-86 hermetic tests, no network — they run on synthetic frames so an outage
+98 hermetic tests, no network — they run on synthetic frames so an outage
 at any data source can never redden the build.
 
 The leakage tests are the centrepiece, and they are themselves verified by
@@ -460,8 +467,9 @@ ruff check .
 Hosted deployment (the container runs locally by design), and a scheduled
 Prefect deployment against a Prefect server rather than ad-hoc flow runs.
 
-Note the MLflow Model Registry versions integers, not semver — semantic versions
-live in tags alongside the alias.
+MLflow's registry still assigns integer versions, while the release identifier
+`model_semver` is validated from `params.yaml`, stored in the model contract and
+registry tags, and returned by every model-bearing API response.
 
 ## Responsible use
 

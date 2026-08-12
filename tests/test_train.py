@@ -20,10 +20,15 @@ from src.features import build_feature_frame
 from src.splits import Split
 from src.train import (
     StackingEnsemble,
+    assert_semver_available,
     build_model,
+    fit_deployment_model,
+    run_fold,
     run_fold_stacking,
+    select_champion,
     tune_lightgbm,
     tune_model,
+    validate_model_semver,
 )
 
 SEARCH_SPACE = {
@@ -203,6 +208,56 @@ def test_run_fold_stacking_skips_a_fold_too_short_for_three_slices(features_fram
         run_fold_stacking(features_frame, short_fold, "market_blind")
 
 
+def test_candidate_fold_runners_reject_the_holdout(features_frame):
+    holdout = Split(name="holdout_2021", train_seasons=(2018, 2019, 2020), eval_seasons=(2021,))
+    with pytest.raises(ValueError, match="sealed holdout"):
+        run_fold(features_frame, holdout, "market_blind", "logistic")
+    with pytest.raises(ValueError, match="sealed holdout"):
+        run_fold_stacking(features_frame, holdout, "market_blind")
+
+
+def test_deployment_fit_never_reads_holdout_rows(features_frame, monkeypatch):
+    import src.train as train_module
+
+    split = Split(name="holdout_2021", train_seasons=(2018, 2019, 2020), eval_seasons=(2021,))
+    seen = {}
+
+    def fake_fit(model_name, train, cols, received_split, overrides=None):
+        seen["seasons"] = set(train["season"])
+        seen["split"] = received_split
+        return object(), (), ()
+
+    monkeypatch.setattr(train_module, "holdout_split", lambda: split)
+    monkeypatch.setattr(train_module, "fit_calibrated", fake_fit)
+    _, _, train_seasons = fit_deployment_model(
+        features_frame, "market_blind", "logistic", None
+    )
+
+    assert seen["seasons"] == {2018, 2019, 2020}
+    assert 2021 not in seen["seasons"]
+    assert seen["split"] == split
+    assert train_seasons == [2018, 2019, 2020]
+
+
+@pytest.mark.parametrize("value", ["1", "1.0", "01.0.0", "v1.0.0", "1.0.0.0"])
+def test_model_semver_must_be_strict(value):
+    with pytest.raises(ValueError, match="semantic version"):
+        validate_model_semver(value)
+
+
+def test_duplicate_model_semver_is_rejected():
+    class Existing:
+        version = "4"
+        tags = {"model_semver": "1.0.0"}
+
+    class FakeClient:
+        def search_model_versions(self, _filter):
+            return [Existing()]
+
+    with pytest.raises(ValueError, match="already assigned"):
+        assert_semver_available(FakeClient(), "1.0.0")
+
+
 def test_register_champion_selects_best_of_enlarged_candidate_set(tmp_path, monkeypatch):
     """The larger candidate pool (lightgbm_tuned, stacking added on top of
     logistic/lightgbm) must fall out of the SAME unmodified selection rule:
@@ -213,11 +268,16 @@ def test_register_champion_selects_best_of_enlarged_candidate_set(tmp_path, monk
         version = "7"
 
     class FakeClient:
+        tags = {}
+
+        def search_model_versions(self, _filter):
+            return []
+
         def set_registered_model_alias(self, *args, **kwargs):
             pass
 
-        def set_model_version_tag(self, *args, **kwargs):
-            pass
+        def set_model_version_tag(self, _name, _version, key, value):
+            self.tags[key] = value
 
     monkeypatch.setattr(train_module.mlflow, "register_model", lambda *a, **k: FakeVersion())
     monkeypatch.setattr(train_module, "MlflowClient", FakeClient)
@@ -233,22 +293,21 @@ def test_register_champion_selects_best_of_enlarged_candidate_set(tmp_path, monk
         },
         ("market_aware", "stacking"): {"wf_log_loss": 1.5, "wf_market_log_loss": 0.97, "wf_gap": 0.53},
     }
-    holdout_runs = {
-        key: {
-            "run_id": "fake-run-id",
-            "model_metrics": {"log_loss": v["wf_log_loss"]},
-            "market_metrics": {"log_loss": v["wf_market_log_loss"]},
-            "feature_columns": ["f1", "f2"],
-            "train_seasons": [2018, 2019, 2020],
-        }
-        for key, v in wf_summary.items()
+    best_key = select_champion(wf_summary)
+    run_info = {
+        "run_id": "fake-run-id",
+        "feature_columns": ["f1", "f2"],
+        "train_seasons": [2018, 2019, 2020],
     }
 
-    train_module.register_champion(wf_summary, holdout_runs)
+    train_module.register_champion(wf_summary, best_key, run_info)
 
     written = json.loads(train_module.CHAMPION_PATH.read_text())
     assert written["track"] == "market_aware"
     assert written["algorithm"] == "lightgbm_tuned"
+    assert written["model_semver"] == "1.0.0"
+    assert "holdout" not in written
+    assert FakeClient.tags["model_semver"] == "1.0.0"
     assert set(written["all_configurations"]) == {
         "market_blind/logistic",
         "market_blind/lightgbm",

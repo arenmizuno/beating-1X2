@@ -32,6 +32,7 @@ def client(monkeypatch):
     champion = Champion(
         model=StubModel(),
         version="7",
+        model_semver="1.0.0",
         run_id="stub-run",
         track="market_blind",
         algorithm="logistic",
@@ -53,6 +54,7 @@ def test_health_reports_the_loaded_model(client):
     assert body["status"] == "ok"
     assert body["model_name"] == "beating-1x2"
     assert body["model_version"] == "7"
+    assert body["model_semver"] == "1.0.0"
     assert body["model_alias"] == "champion"
 
 
@@ -60,6 +62,7 @@ def test_model_endpoint_exposes_the_contract(client):
     body = client.get("/model").json()
     assert body["track"] == "market_blind"
     assert body["algorithm"] == "logistic"
+    assert body["model_semver"] == "1.0.0"
     assert body["n_features"] == 3
     assert body["feature_columns"] == ["home_elo", "away_elo", "elo_diff"]
 
@@ -76,6 +79,7 @@ def test_predict_returns_a_distribution_per_row(client):
     ).json()
 
     assert body["model_version"] == "7"
+    assert body["model_semver"] == "1.0.0"
     assert len(body["predictions"]) == 2
     for prediction in body["predictions"]:
         total = prediction["p_home"] + prediction["p_draw"] + prediction["p_away"]

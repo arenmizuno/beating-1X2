@@ -29,10 +29,10 @@ The workflow mirrors the four required steps:
                            distribution shifts, or log loss degrades past a
                            threshold. The dashboard renders the alerts in red.
 
-Scoring goes through the live FastAPI service when `API_URL` is set and
-reachable (this is the literal "send drifted data to the deployed model"), and
-falls back to the identical in-process code path otherwise, so the script and
-its test run with or without a server.
+Scoring goes through the live FastAPI service and fails closed if it is not
+reachable. Unit tests and local diagnostics may opt into the identical
+in-process code path explicitly with `--in-process`; production-validation
+artifacts can therefore never silently claim a deployment was exercised.
 
 Outputs:
   reports/drift/stress_test.json               baseline + per-scenario summary
@@ -68,6 +68,7 @@ from src.train import apply_probability_floor, make_design
 log = get_logger("stress_test")
 
 DRIFT_DIR = REPORTS_DIR / "drift"
+DEFAULT_API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 # A scenario alerts when any of these trip. The thresholds are deliberately
 # lenient enough that the clean baseline (measured against itself) never fires,
@@ -131,30 +132,37 @@ def score(
     feature_columns: list[str],
     champion: Champion,
     api_url: str | None,
+    *,
+    in_process: bool = False,
 ) -> tuple[np.ndarray, str]:
-    """Return (n, 3) probabilities from the deployed API, or the same code path
-    in-process if no reachable API is configured.
-    """
-    if api_url:
-        rows = []
-        for _, row in frame.iterrows():
-            feats = {
-                col: float(row[col]) for col in feature_columns if pd.notna(row[col])
-            }
-            rows.append({"league": row["league"], "features": feats})
-        try:
-            resp = requests.post(f"{api_url}/predict", json={"rows": rows}, timeout=180)
-            resp.raise_for_status()
-            preds = resp.json()["predictions"]
-            proba = np.array([[p["p_home"], p["p_draw"], p["p_away"]] for p in preds])
-            return proba, f"{api_url}/predict"
-        except Exception as exc:  # noqa: BLE001
-            log.warning("live API unreachable (%s); scoring in-process instead", exc)
+    """Return probabilities from the required API or explicit diagnostic path."""
+    if in_process:
+        proba, _ = apply_probability_floor(
+            champion.model.predict_proba(make_design(frame, feature_columns))
+        )
+        return proba, "in-process (explicit diagnostic mode)"
 
-    proba, _ = apply_probability_floor(
-        champion.model.predict_proba(make_design(frame, feature_columns))
-    )
-    return proba, "in-process (identical served code path)"
+    if not api_url:
+        raise ValueError("api_url is required unless in_process=True")
+
+    rows = []
+    for _, row in frame.iterrows():
+        feats = {col: float(row[col]) for col in feature_columns if pd.notna(row[col])}
+        rows.append({"league": row["league"], "features": feats})
+    try:
+        resp = requests.post(f"{api_url}/predict", json={"rows": rows}, timeout=180)
+        resp.raise_for_status()
+        payload = resp.json()
+        preds = payload["predictions"]
+    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"deployed API validation failed at {api_url}/predict: {exc}") from exc
+
+    if len(preds) != len(frame):
+        raise RuntimeError(
+            f"deployed API returned {len(preds)} predictions for {len(frame)} input rows"
+        )
+    proba = np.array([[p["p_home"], p["p_draw"], p["p_away"]] for p in preds])
+    return proba, f"{api_url}/predict"
 
 
 def input_drift(
@@ -213,8 +221,13 @@ def outcome_mix(proba: np.ndarray) -> dict:
     return {o: float(proba[:, i].mean()) for i, o in enumerate(OUTCOMES)}
 
 
+def select_holdout_rows(features: pd.DataFrame) -> pd.DataFrame:
+    """Return the complete sealed season without complete-case filtering."""
+    return features[features["season"] == HOLDOUT_SEASON].reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
-def run(api_url: str | None) -> dict:
+def run(api_url: str | None, *, in_process: bool = False) -> dict:
     ensure_dirs()
     DRIFT_DIR.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
@@ -223,22 +236,20 @@ def run(api_url: str | None) -> dict:
     feature_columns = champion.feature_columns
 
     features = pd.read_parquet(FEATURES_PATH)
-    clean = (
-        features[features["season"] == HOLDOUT_SEASON]
-        .dropna(subset=feature_columns)
-        .reset_index(drop=True)
-    )
+    clean = select_holdout_rows(features)
     y_true = clean["ftr"].map(OUTCOME_TO_IDX).to_numpy()
     market_proba = clean[[f"p_market_{o}" for o in OUTCOMES]].to_numpy(dtype=float)
     log.info(
-        "clean holdout: %s, %d complete rows scored via %s",
+        "clean holdout: %s, %d rows scored via %s",
         season_label(HOLDOUT_SEASON),
         len(clean),
-        api_url or "in-process",
+        "explicit in-process mode" if in_process else api_url,
     )
 
     # 1. Baseline -----------------------------------------------------------
-    base_proba, source = score(clean, feature_columns, champion, api_url)
+    base_proba, source = score(
+        clean, feature_columns, champion, api_url, in_process=in_process
+    )
     base_perf = performance(base_proba, y_true, market_proba)
     base_mix = outcome_mix(base_proba)
 
@@ -266,7 +277,9 @@ def run(api_url: str | None) -> dict:
     scenarios = []
     feature_rows = []
     for name, description, corrupted in scenarios_spec:
-        proba, _ = score(corrupted, feature_columns, champion, api_url)
+        proba, _ = score(
+            corrupted, feature_columns, champion, api_url, in_process=in_process
+        )
         drift = input_drift(clean, corrupted, feature_columns)
         perf = performance(proba, y_true, market_proba)
         pred_psi = population_stability_index(base_proba[:, 0], proba[:, 0])
@@ -324,6 +337,7 @@ def run(api_url: str | None) -> dict:
         "scored_via": source,
         "champion": {
             "version": champion.version,
+            "model_semver": champion.model_semver,
             "track": champion.track,
             "algorithm": champion.algorithm,
         },
@@ -450,6 +464,7 @@ def write_html_report(summary: dict) -> None:
   <h1>beating-1X2 — drift stress test</h1>
   <div class="sub">
     Champion <b>v{summary['champion']['version']}</b>
+    (semver {summary['champion']['model_semver']})
     ({summary['champion']['track']}/{summary['champion']['algorithm']}) ·
     clean holdout {season_label(summary['holdout_season'])}, {summary['n_rows']} rows ·
     scored via <code>{summary['scored_via']}</code>
@@ -479,12 +494,16 @@ def main() -> dict:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--api-url",
-        default=os.environ.get("API_URL"),
-        help="Base URL of the deployed API (e.g. http://localhost:8000). "
-        "If omitted or unreachable, scoring runs in-process.",
+        default=DEFAULT_API_URL,
+        help="Required deployed API base URL (default: API_URL or http://127.0.0.1:8000).",
+    )
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help="Explicit diagnostic mode that bypasses the deployed API; never use for final evidence.",
     )
     args = parser.parse_args()
-    return run(args.api_url)
+    return run(args.api_url, in_process=args.in_process)
 
 
 if __name__ == "__main__":

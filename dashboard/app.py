@@ -53,7 +53,10 @@ st.caption(
 champion = load_json(REPORTS_DIR / "champion.json")
 if champion:
     a, b, c, d = st.columns(4)
-    a.metric("Champion", f"v{champion['version']}")
+    a.metric(
+        "Champion",
+        f"{champion['model_semver']} (MLflow v{champion['version']})",
+    )
     b.metric("Configuration", f"{champion['track']}/{champion['algorithm']}")
     c.metric("Walk-forward log loss", f"{champion['walk_forward']['wf_log_loss']:.4f}")
     d.metric(
@@ -297,7 +300,8 @@ with live_tab:
         health = requests.get(f"{API_URL}/health", timeout=5).json()
         st.success(
             f"API {health['status']} — {health['model_name']} "
-            f"v{health['model_version']} @{health['model_alias']}"
+            f"{health['model_semver']} (MLflow v{health['model_version']}) "
+            f"@{health['model_alias']}"
         )
         upcoming = requests.get(f"{API_URL}/predict/upcoming", timeout=60).json()
 

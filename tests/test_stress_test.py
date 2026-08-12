@@ -8,8 +8,12 @@ against the pipeline, not here.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
+import pytest
+import requests
 
 from src.stress_test import (
     corrupt_out_of_bounds,
@@ -17,6 +21,8 @@ from src.stress_test import (
     corrupt_swapped,
     input_drift,
     performance,
+    score,
+    select_holdout_rows,
 )
 
 FEATURES = [
@@ -109,3 +115,76 @@ def test_performance_reports_gap_to_market():
     perf = performance(proba, y, market)
     assert set(perf) == {"log_loss", "ece", "accuracy", "market_log_loss", "gap"}
     assert perf["gap"] == perf["log_loss"] - perf["market_log_loss"]
+
+
+def test_holdout_selection_keeps_rows_with_missing_features():
+    frame = _frame(4)
+    frame["season"] = [2025, 2025, 2024, 2025]
+    frame.loc[1, "home_xg_for_r5"] = np.nan
+
+    selected = select_holdout_rows(frame)
+
+    assert len(selected) == 3
+    assert selected["home_xg_for_r5"].isna().sum() == 1
+
+
+def test_score_fails_closed_when_api_is_unreachable(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "post", unavailable)
+    champion = SimpleNamespace(model=None)
+    with pytest.raises(RuntimeError, match="deployed API validation failed"):
+        score(_frame(3), FEATURES, champion, "http://127.0.0.1:8000")
+
+
+def test_score_allows_explicit_in_process_mode():
+    class StubModel:
+        def predict_proba(self, design):
+            return np.tile([0.5, 0.3, 0.2], (len(design), 1))
+
+    frame = _frame(3)
+    frame.loc[1, "home_xg_for_r5"] = np.nan
+    proba, source = score(
+        frame,
+        FEATURES,
+        SimpleNamespace(model=StubModel()),
+        None,
+        in_process=True,
+    )
+
+    assert proba.shape == (3, 3)
+    assert source.startswith("in-process")
+
+
+def test_api_scoring_preserves_row_order_and_omits_nan(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "predictions": [
+                    {"p_home": 0.6, "p_draw": 0.2, "p_away": 0.2},
+                    {"p_home": 0.2, "p_draw": 0.3, "p_away": 0.5},
+                ]
+            }
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return Response()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    frame = _frame(2)
+    frame.loc[1, "home_xg_for_r5"] = np.nan
+    proba, source = score(
+        frame, FEATURES, SimpleNamespace(model=None), "http://model-service:8000"
+    )
+
+    np.testing.assert_allclose(proba[:, 0], [0.6, 0.2])
+    assert source == "http://model-service:8000/predict"
+    assert captured["url"] == source
+    assert "home_xg_for_r5" not in captured["json"]["rows"][1]["features"]
