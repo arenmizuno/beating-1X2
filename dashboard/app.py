@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -25,8 +26,115 @@ from src.config import OUTCOMES, REPORTS_DIR, season_label  # noqa: E402
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 DRIFT_DIR = REPORTS_DIR / "drift"
+APP_DIR = Path(__file__).resolve().parent
 
-st.set_page_config(page_title="beating-1X2", page_icon="⚽", layout="wide")
+st.set_page_config(
+    page_title="Beating the 1X2 · Model Monitor",
+    page_icon="⚽",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+
+def apply_visual_system() -> None:
+    """Load the dashboard's local, dependency-free visual system."""
+    st.markdown(
+        f"<style>{(APP_DIR / 'style.css').read_text()}</style>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero(model: dict | None) -> None:
+    """Introduce the product, its state, and the current model release."""
+    if model:
+        gap = float(model["walk_forward"]["wf_gap"])
+        outcome = (
+            f"Market leads by {gap:+.4f} log loss"
+            if gap > 0
+            else f"Model leads by {abs(gap):.4f} log loss"
+        )
+        outcome_class = "warning" if gap > 0 else "positive"
+        release = f"SemVer {escape(str(model['model_semver']))} · MLflow v{model['version']}"
+    else:
+        outcome = "Model report unavailable"
+        outcome_class = "warning"
+        release = "Run the pipeline to publish a release"
+
+    st.markdown(
+        f"""
+        <section class="hero-shell" aria-labelledby="dashboard-title">
+          <div class="hero-copy">
+            <span class="eyebrow">Production model monitor</span>
+            <h1 class="hero-title" id="dashboard-title">Beating the 1X2</h1>
+            <p class="hero-subtitle">
+              Match-outcome intelligence for Europe’s top five leagues, evaluated
+              against the closing betting market and monitored from training to serving.
+            </p>
+            <div class="status-row" aria-label="Model status">
+              <span class="status-chip {outcome_class}">
+                <span class="status-dot" aria-hidden="true"></span>{escape(outcome)}
+              </span>
+              <span class="meta-chip">{release}</span>
+            </div>
+          </div>
+          <div class="hero-mark" aria-hidden="true">1X2</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_intro(eyebrow: str, title: str, description: str) -> None:
+    """Create consistent wayfinding at the start of every dashboard view."""
+    st.markdown(
+        f"""
+        <header class="section-heading">
+          <span class="eyebrow">{escape(eyebrow)}</span>
+          <h2>{escape(title)}</h2>
+          <p>{escape(description)}</p>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_model_summary(model: dict) -> None:
+    """Show the champion metadata in a responsive, glanceable grid."""
+    walk_forward = model["walk_forward"]
+    algorithm = str(model["algorithm"]).replace("_", " ").title()
+    track = str(model["track"]).replace("_", " ")
+    st.markdown(
+        f"""
+        <section class="metric-grid" aria-label="Champion model summary">
+          <div class="metric-card">
+            <span class="metric-card-label">Release</span>
+            <span class="metric-card-value">v{escape(str(model['model_semver']))}</span>
+            <span class="metric-card-detail">MLflow v{model['version']}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-card-label">Configuration</span>
+            <span class="metric-card-value">{escape(algorithm)}</span>
+            <span class="metric-card-detail">{escape(track)}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-card-label">CV log loss</span>
+            <span class="metric-card-value">{walk_forward['wf_log_loss']:.4f}</span>
+            <span class="metric-card-detail">Four common walk-forward folds</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-card-label">Market benchmark</span>
+            <span class="metric-card-value">{walk_forward['wf_market_log_loss']:.4f}</span>
+            <span class="metric-card-detail warning">
+              Gap {walk_forward['wf_gap']:+.4f} · lower is better
+            </span>
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_visual_system()
 
 
 @st.cache_data
@@ -43,37 +151,22 @@ def missing(name: str) -> None:
     st.warning(f"`{name}` not found. Run the pipeline first — see the README.")
 
 
-# ---------------------------------------------------------------------------
-st.title("beating-1X2")
-st.caption(
-    "Match-outcome models for the top-5 European leagues, benchmarked against "
-    "the betting market's closing line."
-)
-
 champion = load_json(REPORTS_DIR / "champion.json")
+render_hero(champion)
 if champion:
-    a, b, c, d = st.columns(4)
-    a.metric(
-        "Champion",
-        f"{champion['model_semver']} (MLflow v{champion['version']})",
-    )
-    b.metric("Configuration", f"{champion['track']}/{champion['algorithm']}")
-    c.metric("Walk-forward log loss", f"{champion['walk_forward']['wf_log_loss']:.4f}")
-    d.metric(
-        "vs market",
-        f"{champion['walk_forward']['wf_market_log_loss']:.4f}",
-        delta=f"{champion['walk_forward']['wf_gap']:+.4f}",
-        delta_color="inverse",  # a positive gap means we are WORSE
-        help="Lower log loss is better, so a positive gap means the market wins.",
-    )
+    render_model_summary(champion)
 
 results_tab, calibration_tab, drift_tab, stress_tab, live_tab = st.tabs(
-    ["Results", "Calibration", "Drift", "Stress test", "Live fixtures"]
+    ["Performance", "Calibration", "Data drift", "Stress tests", "Live scoring"]
 )
 
 # ---------------------------------------------------------------------------
 with results_tab:
-    st.subheader("Model vs market")
+    section_intro(
+        "Performance",
+        "Model versus market",
+        "Compare every walk-forward configuration with the vig-free closing line. Lower log loss is better.",
+    )
     comparison = load_csv(REPORTS_DIR / "model_vs_market.csv")
     if comparison is None:
         missing("reports/model_vs_market.csv")
@@ -88,7 +181,7 @@ with results_tab:
         )
         summary["gap_vs_market"] = summary["model_log_loss"] - summary["market_log_loss"]
         st.dataframe(
-            summary.sort_values("model_log_loss").round(4), use_container_width=True
+            summary.sort_values("model_log_loss").round(4), width="stretch"
         )
         st.caption(
             "Every configuration loses to the closing line. The market_aware track "
@@ -116,7 +209,7 @@ with results_tab:
                     "flat_roi_hi", "mean_clv",
                 ]
             ].round(4),
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             "ROI intervals are 95% bootstrap. Every interval spans or sits below "
@@ -125,7 +218,11 @@ with results_tab:
 
 # ---------------------------------------------------------------------------
 with calibration_tab:
-    st.subheader("Reliability")
+    section_intro(
+        "Calibration",
+        "Probability reliability",
+        "Inspect whether predicted probabilities match observed outcome rates across home wins, draws, and away wins.",
+    )
     calibration = load_csv(REPORTS_DIR / "calibration_data.csv")
     if calibration is None:
         missing("reports/calibration_data.csv")
@@ -157,7 +254,11 @@ with calibration_tab:
 
 # ---------------------------------------------------------------------------
 with drift_tab:
-    st.subheader("Drift monitoring")
+    section_intro(
+        "Data drift",
+        "Distribution monitoring",
+        "Track outcome, feature, and calibration shifts against a pre-COVID reference window.",
+    )
     drift_summary = load_json(DRIFT_DIR / "drift_metrics.json")
     targets = load_csv(DRIFT_DIR / "target_drift.csv")
 
@@ -175,7 +276,7 @@ with drift_tab:
         display["season"] = display["season"].map(season_label)
         st.dataframe(
             display[["season", "n", "rate_H", "rate_D", "rate_A", "p_value", "drifted"]].round(4),
-            use_container_width=True,
+            width="stretch",
         )
         st.line_chart(display.set_index("season")[["rate_H", "rate_D", "rate_A"]])
         st.caption(
@@ -204,7 +305,11 @@ with drift_tab:
 
 # ---------------------------------------------------------------------------
 with stress_tab:
-    st.subheader("Drift stress test — corrupted data vs the deployed model")
+    section_intro(
+        "Stress tests",
+        "Known faults versus the deployed model",
+        "Corrupt the sealed holdout in controlled ways and verify that independent monitoring signals catch each failure.",
+    )
     stress = load_json(DRIFT_DIR / "stress_test.json")
 
     if stress is None:
@@ -223,11 +328,11 @@ with stress_tab:
         n_alerts = stress["n_alerts"]
         total = len(stress["scenarios"])
         if n_alerts == total:
-            st.error(f"MONITOR ALERT — all {total}/{total} injected faults caught.")
+            st.success(f"Verification passed — all {total}/{total} injected faults were caught.")
         elif n_alerts:
-            st.warning(f"MONITOR ALERT — {n_alerts}/{total} injected faults caught.")
+            st.warning(f"Partial verification — {n_alerts}/{total} injected faults were caught.")
         else:
-            st.success("No anomalies detected.")
+            st.error("Verification failed — none of the injected faults produced an alert.")
 
         a, b, c, d = st.columns(4)
         a.metric("Baseline log loss", f"{base['log_loss']:.4f}")
@@ -257,7 +362,7 @@ with stress_tab:
 
         st.dataframe(
             view.style.apply(_flag_alert, axis=1),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -293,8 +398,12 @@ with stress_tab:
 
 # ---------------------------------------------------------------------------
 with live_tab:
-    st.subheader("Live fixtures")
-    st.caption(f"API: `{API_URL}`")
+    section_intro(
+        "Live scoring",
+        "Upcoming fixtures",
+        "Check serving health, score the latest fixtures, and surface value flags against currently available prices.",
+    )
+    st.caption(f"Serving endpoint: `{API_URL}`")
 
     try:
         health = requests.get(f"{API_URL}/health", timeout=5).json()
@@ -316,7 +425,7 @@ with live_tab:
             left, right = st.columns(2)
             left.metric("Fixtures scored", len(frame))
             right.metric("Flagged as value", flagged)
-            st.dataframe(frame.round(4), use_container_width=True)
+            st.dataframe(frame.round(4), width="stretch")
         else:
             st.write("No fixtures to score right now.")
     except Exception as exc:  # noqa: BLE001
