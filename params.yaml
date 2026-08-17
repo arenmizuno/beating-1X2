@@ -9,7 +9,7 @@ seed: 42
 # Release identifier for the registered model artifact. MLflow assigns its own
 # integer registry version; this semantic version describes the model contract
 # and must be bumped intentionally before registering a materially new release.
-model_semver: "1.0.0"
+model_semver: "1.0.1"
 
 # ---------------------------------------------------------------------------
 # Scope

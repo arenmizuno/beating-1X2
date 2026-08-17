@@ -45,6 +45,7 @@ from src.config import (
     FEATURES_PATH,
     OUTCOMES,
     PROCESSED_DIR,
+    PROJECT_ROOT,
     REPORTS_DIR,
     ensure_dirs,
     get_logger,
@@ -219,7 +220,11 @@ def write_evidently_reports(features: pd.DataFrame, feature_columns: list[str]) 
             evaluation = report.run(reference_data=reference, current_data=current)
             path = DRIFT_DIR / f"evidently_{season}.html"
             evaluation.save_html(str(path))
-            written.append(str(path))
+            # Recorded relative to the project root, not absolutely. This list
+            # lands in the committed drift_metrics.json, so an absolute path
+            # rewrites the file to whoever ran the stage last -- producing a
+            # merge conflict on every run and leaking local directory layout.
+            written.append(str(path.relative_to(PROJECT_ROOT)))
             log.info("wrote %s", path)
         except Exception as exc:  # noqa: BLE001
             log.warning("Evidently report failed for %s: %s", season, exc)

@@ -305,9 +305,12 @@ def test_register_champion_selects_best_of_enlarged_candidate_set(tmp_path, monk
     written = json.loads(train_module.CHAMPION_PATH.read_text())
     assert written["track"] == "market_aware"
     assert written["algorithm"] == "lightgbm_tuned"
-    assert written["model_semver"] == "1.0.0"
+    # Compared against the configured value, not a literal: the assertion is
+    # that register_champion writes and tags whatever semver params.yaml
+    # declares, which stays true across intentional version bumps.
+    assert written["model_semver"] == train_module.MODEL_SEMVER
     assert "holdout" not in written
-    assert FakeClient.tags["model_semver"] == "1.0.0"
+    assert FakeClient.tags["model_semver"] == train_module.MODEL_SEMVER
     assert set(written["all_configurations"]) == {
         "market_blind/logistic",
         "market_blind/lightgbm",

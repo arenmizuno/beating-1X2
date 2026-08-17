@@ -96,7 +96,30 @@ See `reports/summary.md` for the generated detail.
 python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
-Then, in order (each stage is independently runnable and caches its downloads):
+Activate it before running anything else:
+
+```bash
+source .venv/bin/activate
+```
+
+This matters more than the usual boilerplate. The DVC and Prefect entry points
+further down invoke each stage as a bare `python -m src.<stage>`, so an
+unactivated shell runs them under whatever interpreter is first on `PATH`. On a
+machine with conda that is the base environment, which happens to have pandas
+and pyarrow but not catboost -- ingestion through `features` succeeds, and the
+pipeline then dies at `train` with `ModuleNotFoundError: No module named
+'catboost'`.
+
+The orchestration and monitoring layer (DVC, Prefect, Evidently, Streamlit) is
+installed separately, so the served container does not carry a workflow engine:
+
+```bash
+pip install -r requirements-ops.txt
+```
+
+Then, in order (each stage is independently runnable and caches its downloads).
+The explicit `./.venv/bin/python` prefix below is redundant once the environment
+is active; it is spelled out so each command also works on its own:
 
 ```bash
 ./.venv/bin/python -m src.ingest_footballdata
@@ -385,6 +408,9 @@ like orchestrators. They do different jobs:
   against flaky third-party sources, concurrency, and run observability. The
   three ingestion tasks run concurrently with retries; everything downstream is
   sequential.
+
+Both shell out to `python -m src.<stage>`, so activate the virtualenv first --
+see [Running it](#running-it) for what happens when you do not.
 
 ```bash
 dvc repro

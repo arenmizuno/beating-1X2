@@ -27,10 +27,15 @@ services:
   dashboard:
     build: .
     image: beating-1x2-api
-    command: >
-      sh -c "pip install --no-cache-dir streamlit>=1.35 &&
-             streamlit run dashboard/app.py
-             --server.port=8501 --server.address=0.0.0.0"
+    # One line, quoted, and invoked as `python -m streamlit`, for three reasons
+    # that each broke this container:
+    #   * a folded YAML block keeps the newlines of more-indented lines, so sh
+    #     received the flags as separate commands;
+    #   * unquoted `streamlit>=1.35` is a shell redirect, which silently dropped
+    #     the version floor and wrote a file named `=1.35`;
+    #   * pip installs as non-root into ~/.local/bin, which is not on PATH, so
+    #     the `streamlit` entry point is not directly executable.
+    command: sh -c "pip install --no-cache-dir 'streamlit>=1.35' && python -m streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0"
     ports:
       - "8501:8501"
     volumes:
@@ -44,4 +49,35 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       - api
+    # Override the image's HEALTHCHECK, which probes the API on :8000 -- a port
+    # this service does not serve, so it would report unhealthy while working.
+    # Streamlit's own readiness endpoint is the honest signal. The start period
+    # is generous because the container pip-installs Streamlit before booting.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    restart: unless-stopped
+
+  mlflow:
+    build: .
+    image: beating-1x2-api
+    # The tracking UI needs no extra dependencies: mlflow is already in
+    # requirements.txt because the API loads the champion through it.
+    command: mlflow ui --backend-store-uri /app/mlruns --host 0.0.0.0 --port 5000
+    ports:
+      # 5000 inside, 5001 outside: macOS Control Center (AirPlay Receiver)
+      # holds host port 5000, which silently shadows the UI.
+      - "5001:5000"
+    volumes:
+      # Read-only, like the API: browsing runs must never mutate the store.
+      - ./mlruns:/app/mlruns:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    # The image's HEALTHCHECK probes the API on :8000, which this service does
+    # not serve; without this it would report unhealthy while working fine.
+    healthcheck:
+      disable: true
     restart: unless-stopped

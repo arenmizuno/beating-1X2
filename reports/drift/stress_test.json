@@ -3,8 +3,8 @@
   "n_rows": 1727,
   "scored_via": "http://127.0.0.1:8000/predict",
   "champion": {
-    "version": "2",
-    "model_semver": "1.0.0",
+    "version": "5",
+    "model_semver": "1.0.1",
     "track": "market_aware",
     "algorithm": "catboost_tuned"
   },

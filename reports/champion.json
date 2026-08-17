@@ -1,9 +1,9 @@
 {
   "registered_model": "beating-1x2",
-  "version": 2,
-  "model_semver": "1.0.0",
+  "version": 5,
+  "model_semver": "1.0.1",
   "alias": "champion",
-  "run_id": "cf1ed05a529e49899ff8a9f6268027d0",
+  "run_id": "cb03c347607d470e8433eef1a8e317c3",
   "track": "market_aware",
   "algorithm": "catboost_tuned",
   "selected_by": "walk_forward_mean_log_loss",
@@ -19,98 +19,98 @@
   "n_features": 86,
   "walk_forward": {
     "wf_log_loss": 0.9749054942227926,
-    "wf_market_log_loss": 0.9674809423415066,
-    "wf_gap": 0.00742455188128599
+    "wf_market_log_loss": 0.9674809423415067,
+    "wf_gap": 0.007424551881285879
   },
   "all_configurations": {
     "market_blind/logistic": {
       "wf_log_loss": 0.9967491938389976,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.029268251497491016
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.029268251497490905
     },
     "market_blind/lightgbm": {
       "wf_log_loss": 1.007277346145657,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.03979640380415039
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.03979640380415028
     },
     "market_blind/lightgbm_tuned": {
       "wf_log_loss": 1.0002382645319412,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.03275732219043459
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.03275732219043448
     },
     "market_blind/xgboost": {
       "wf_log_loss": 0.9988194421062888,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.0313384997647822
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.03133849976478209
     },
     "market_blind/xgboost_tuned": {
-      "wf_log_loss": 0.9869801396925688,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.019499197351062203
+      "wf_log_loss": 0.9869801396925687,
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.01949919735106198
     },
     "market_blind/catboost": {
       "wf_log_loss": 0.9898102646444229,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.022329322302916288
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.022329322302916177
     },
     "market_blind/catboost_tuned": {
       "wf_log_loss": 0.9862733606183922,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.018792418276885603
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.018792418276885492
     },
     "market_blind/mlp": {
-      "wf_log_loss": 1.0053585068620972,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.037877564520590545
+      "wf_log_loss": 1.005358506862097,
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.03787756452059021
     },
     "market_blind/stacking": {
-      "wf_log_loss": 0.9900300061626162,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.02254906382110955
+      "wf_log_loss": 0.990030006162616,
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.022549063821109327
     },
     "market_aware/logistic": {
       "wf_log_loss": 0.9849814189944796,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.01750047665297294
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.01750047665297283
     },
     "market_aware/lightgbm": {
-      "wf_log_loss": 0.9990467723581968,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.03156583001669022
+      "wf_log_loss": 0.999046772358197,
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.03156583001669033
     },
     "market_aware/lightgbm_tuned": {
-      "wf_log_loss": 0.9895783984589551,
-      "wf_market_log_loss": 0.9674809423415066,
+      "wf_log_loss": 0.9895783984589552,
+      "wf_market_log_loss": 0.9674809423415067,
       "wf_gap": 0.02209745611744851
     },
     "market_aware/xgboost": {
       "wf_log_loss": 0.9877794752816296,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.02029853294012296
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.02029853294012285
     },
     "market_aware/xgboost_tuned": {
       "wf_log_loss": 0.9750989873198173,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.007618044978310645
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.007618044978310534
     },
     "market_aware/catboost": {
-      "wf_log_loss": 0.978433246581726,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.010952304240219424
+      "wf_log_loss": 0.9784332465817259,
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.010952304240219202
     },
     "market_aware/catboost_tuned": {
       "wf_log_loss": 0.9749054942227926,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.00742455188128599
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.007424551881285879
     },
     "market_aware/mlp": {
       "wf_log_loss": 0.9949128665108122,
-      "wf_market_log_loss": 0.9674809423415066,
-      "wf_gap": 0.02743192416930562
+      "wf_market_log_loss": 0.9674809423415067,
+      "wf_gap": 0.02743192416930551
     },
     "market_aware/stacking": {
-      "wf_log_loss": 0.9778710410568471,
-      "wf_market_log_loss": 0.9674809423415066,
+      "wf_log_loss": 0.9778710410568472,
+      "wf_market_log_loss": 0.9674809423415067,
       "wf_gap": 0.010390098715340468
     }
   }

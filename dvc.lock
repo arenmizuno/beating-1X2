@@ -100,8 +100,8 @@ stages:
     outs:
     - path: data/interim/understat.parquet
       hash: md5
-      md5: 1781591b412627c181683114bd0134dc
-      size: 442712
+      md5: 68d1dc76767a4c68082ba0cd4c6d86e5
+      size: 442654
   ingest_clubelo:
     cmd: python -m src.ingest_clubelo
     deps:
@@ -130,23 +130,23 @@ stages:
     outs:
     - path: data/interim/clubelo.parquet
       hash: md5
-      md5: dfac0dd37492734ddab678582e7259a5
-      size: 1225815
+      md5: 64b566ef35aa661ac8c52807e91fb359
+      size: 1208468
   harmonize:
     cmd: python -m src.harmonize
     deps:
     - path: data/interim/clubelo.parquet
       hash: md5
-      md5: dfac0dd37492734ddab678582e7259a5
-      size: 1225815
+      md5: 64b566ef35aa661ac8c52807e91fb359
+      size: 1208468
     - path: data/interim/footballdata.parquet
       hash: md5
       md5: 0fb5ef62a7a8d0685dae451c10b1b7d0
       size: 552973
     - path: data/interim/understat.parquet
       hash: md5
-      md5: 1781591b412627c181683114bd0134dc
-      size: 442712
+      md5: 68d1dc76767a4c68082ba0cd4c6d86e5
+      size: 442654
     - path: data/mappings/team_aliases_manual.csv
       hash: md5
       md5: a36c6a9526402fa9e5af83d2e5a31591
@@ -169,12 +169,12 @@ stages:
     outs:
     - path: data/interim/clubelo_canonical.parquet
       hash: md5
-      md5: e253873c02de58991438622b436ded58
-      size: 1223713
+      md5: 95d3210f3894f02bb46eba4e0578ab82
+      size: 1221863
     - path: data/interim/matches.parquet
       hash: md5
-      md5: 33806cf64db363a22821730e961773dc
-      size: 983630
+      md5: cd31b95663f1787bb1e74ffd26dfcca1
+      size: 983629
     - path: data/interim/team_aliases_resolved.csv
       hash: md5
       md5: 484cb710ba1a62b7d632fd6cdb8ebd75
@@ -184,8 +184,8 @@ stages:
     deps:
     - path: data/interim/matches.parquet
       hash: md5
-      md5: 33806cf64db363a22821730e961773dc
-      size: 983630
+      md5: cd31b95663f1787bb1e74ffd26dfcca1
+      size: 983629
     - path: src/config.py
       hash: md5
       md5: 6612a48d025a67c8cf7bc0945ac11b92
@@ -216,16 +216,16 @@ stages:
     deps:
     - path: data/interim/clubelo_canonical.parquet
       hash: md5
-      md5: e253873c02de58991438622b436ded58
-      size: 1223713
+      md5: 95d3210f3894f02bb46eba4e0578ab82
+      size: 1221863
     - path: data/interim/market.parquet
       hash: md5
       md5: a2f83cccf659ff1ffc080a4b2b96a4f2
       size: 1800125
     - path: data/interim/matches.parquet
       hash: md5
-      md5: 33806cf64db363a22821730e961773dc
-      size: 983630
+      md5: cd31b95663f1787bb1e74ffd26dfcca1
+      size: 983629
     - path: src/config.py
       hash: md5
       md5: 6612a48d025a67c8cf7bc0945ac11b92
@@ -261,15 +261,15 @@ stages:
     outs:
     - path: data/processed/features.parquet
       hash: md5
-      md5: a9a708e4458f6d239456515b21f6cc65
-      size: 7542177
+      md5: 6c3b6aa9c60e5f457c6e51971090dc93
+      size: 7542204
   train:
     cmd: python -m src.train
     deps:
     - path: data/processed/features.parquet
       hash: md5
-      md5: a9a708e4458f6d239456515b21f6cc65
-      size: 7542177
+      md5: 6c3b6aa9c60e5f457c6e51971090dc93
+      size: 7542204
     - path: reports/catboost_search_market_aware.csv
       hash: md5
       md5: d8096e9e827bd2c175bb747b38bead4b
@@ -335,7 +335,7 @@ stages:
             name: Ligue 1
             country: France
             understat: Ligue_1
-        model_semver: 1.0.0
+        model_semver: 1.0.1
         seed: 42
         split:
           min_train_seasons: 2
@@ -466,7 +466,7 @@ stages:
       size: 8186028
     - path: reports/champion.json
       hash: md5
-      md5: cba871f3a99015babb6d6d132fa0166c
+      md5: 8c33d4282b9ff3062930b27564840110
       size: 3510
   evaluate:
     cmd: python -m src.evaluate
@@ -525,8 +525,8 @@ stages:
     deps:
     - path: data/processed/features.parquet
       hash: md5
-      md5: a9a708e4458f6d239456515b21f6cc65
-      size: 7542177
+      md5: 6c3b6aa9c60e5f457c6e51971090dc93
+      size: 7542204
     - path: data/processed/predictions.parquet
       hash: md5
       md5: 58f8da2b6c1f37879bcb750c7efae568
@@ -537,8 +537,8 @@ stages:
       size: 6143
     - path: src/drift.py
       hash: md5
-      md5: 6eee70457ea31dae3ab2b593c45f91c3
-      size: 11284
+      md5: a244c1719a4d87ed6bc06119b5597706
+      size: 11639
     - path: src/metrics.py
       hash: md5
       md5: 1f07c5eb9f0d895cbaabaac9f8082e32
@@ -550,8 +550,8 @@ stages:
       size: 9946
     - path: reports/drift/drift_metrics.json
       hash: md5
-      md5: a3025b11f3d2f35e5b44b9c921eaa0ce
-      size: 1231
+      md5: a67fe3fce4f0279334dc8bcf84218924
+      size: 733
     - path: reports/drift/feature_drift.csv
       hash: md5
       md5: 536af5a0f7f83caa6c60005411a2b33d

@@ -74,10 +74,21 @@ def load_champion() -> Champion:
     client = mlflow.tracking.MlflowClient()
 
     version = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-    model = mlflow.sklearn.load_model(f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}")
-    contract = json.loads(
-        mlflow.artifacts.load_text(f"runs:/{version.run_id}/model_contract.json")
-    )
+
+    # Resolution is by alias; the artifact *location* is then rebased onto the
+    # local store root instead of trusting the path MLflow recorded.
+    #
+    # The file-backed registry bakes an absolute host path into the version's
+    # `source` (and into each run's `artifact_uri`) at registration time. Loading
+    # `models:/<name>@champion` directly follows that path, which exists only on
+    # the machine that trained the model -- so the container, which mounts the
+    # same store at /app/mlruns, fails at startup with "No such file or
+    # directory". Rebuilding the path from MLRUNS_DIR makes the store relocatable
+    # without changing how the champion is selected.
+    run = client.get_run(version.run_id)
+    artifacts = MLRUNS_DIR / run.info.experiment_id / version.run_id / "artifacts"
+    model = mlflow.sklearn.load_model(str(artifacts / "model"))
+    contract = json.loads((artifacts / "model_contract.json").read_text())
 
     log.info(
         "loaded %s v%s (semver %s, %s/%s, %d features)",
