@@ -140,7 +140,7 @@ is active; it is spelled out so each command also works on its own:
 Inspect experiment tracking with:
 
 ```bash
-./.venv/bin/mlflow ui --backend-store-uri mlruns
+./.venv/bin/mlflow ui --backend-store-uri mlruns --port 5001
 ```
 
 A full cold run takes under ten minutes, most of it polite rate-limiting on the
@@ -372,7 +372,11 @@ downgraded to "no price found", and a measured hit rate written to
 docker compose up --build
 ```
 
-API docs at `http://localhost:8000/docs`, dashboard at `http://localhost:8501`.
+API docs at `http://localhost:8000/docs`, dashboard at `http://localhost:8501`,
+MLflow at `http://localhost:5001`. The MLflow service publishes container port
+5000 as host 5001 because macOS Control Center (AirPlay Receiver) holds 5000 and
+silently shadows the UI.
+
 Or run them directly:
 
 ```bash
@@ -427,6 +431,22 @@ python flows.py            # full pipeline
 ```bash
 python flows.py --scoring  # just refresh and score fixtures
 ```
+
+Generated artifacts are pushed to the DVC remote declared in `.dvc/config`, so a
+fresh clone can recover the exact data a run produced instead of rebuilding it:
+
+```bash
+dvc push
+```
+```bash
+dvc pull
+```
+
+Note that `train` is not idempotent by design. It refuses to register a second
+registry version under a `model_semver` that is already claimed, so re-running a
+completed pipeline unchanged fails at that stage -- deliberately, since an
+identical model is not a new release. Bump `model_semver` in `params.yaml` when
+you intend one.
 
 ### Drift monitoring
 

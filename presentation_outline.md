@@ -63,8 +63,8 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 - **Primary metric: multiclass log loss** — a proper scoring rule that punishes overconfident probabilities; the right lens for betting, where *calibrated probability* matters more than raw accuracy
 - Secondary: Brier score, ECE (calibration), accuracy
 - **Two baselines, each chosen to answer a different question:**
-  - **Vig-free closing market line** (Shin devig): **0.9691** — *the bar to clear.* The sharpest public probability there is; beating it is the definition of an edge. Doubles as a **leakage tripwire** — a sharp line lands ~0.95-1.02, so beating it by a lot means a bug, not skill.
-  - **Dixon-Coles Poisson goals model** (never sees a price): **0.9926** — *the "reasonable model" control.* Shows what a principled, price-blind approach achieves, isolating whether our ML adds anything over a classic goals model. Kept out of the feature set so it stays an independent yardstick.
+  - **Vig-free closing market line** (Shin devig): **0.9693** — *the bar to clear.* The sharpest public probability there is; beating it is the definition of an edge. Doubles as a **leakage tripwire** — a sharp line lands ~0.95-1.02, so beating it by a lot means a bug, not skill.
+  - **Dixon-Coles Poisson goals model** (never sees a price): **0.9928** — *the "reasonable model" control.* Shows what a principled, price-blind approach achieves, isolating whether our ML adds anything over a classic goals model. Kept out of the feature set so it stays an independent yardstick.
 - **Split discipline:** 5-fold **walk-forward** CV + **2025-26 holdout sealed** until final validation; no random K-fold anywhere
 
 **Speaker note:** "We picked two baselines on purpose. The market line is the thing to beat and our leakage alarm. Dixon-Coles is the sanity control — if the fancy models can't even out-predict a textbook Poisson goals model, that's worth knowing. Our models land between the two."
@@ -135,28 +135,34 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ## Slide 10 — Model Results (the core evidence)
 
-**On slide — Walk-forward mean log loss, `market_aware` track (lower is better):**
+**On slide — the four common walk-forward folds, `market_aware` track (lower is
+better). This is the equal-fold view used to select the champion: `stacking`
+cannot score the 2020-21 fold, so ranking every candidate on the folds they all
+completed is what keeps the comparison honest.**
 
 | Model | Log loss | Gap vs market |
 |---|---|---|
-| **catboost_tuned (champion)** | **0.9766** | **+0.0073** |
+| **catboost_tuned (champion)** | **0.9749** | **+0.0074** |
+| xgboost_tuned | 0.9751 | +0.0076 |
 | stacking | 0.9779 | +0.0104 |
-| xgboost_tuned | 0.9790 | +0.0097 |
-| catboost | 0.9826 | +0.0133 |
-| xgboost | 0.9942 | +0.0249 |
-| lightgbm_tuned | 0.9962 | +0.0269 |
-| mlp (neural net) | 1.0000 | +0.0307 |
-| logistic | 1.0012 | +0.0319 |
-| lightgbm | 1.0048 | +0.0356 |
-| **Market (vig-free close)** | **0.9691** | — |
-| Dixon-Coles baseline | 0.9926 | — |
+| catboost | 0.9784 | +0.0110 |
+| logistic | 0.9850 | +0.0175 |
+| xgboost | 0.9878 | +0.0203 |
+| lightgbm_tuned | 0.9896 | +0.0221 |
+| mlp (neural net) | 0.9949 | +0.0274 |
+| lightgbm | 0.9990 | +0.0316 |
+| **Market (vig-free close)** | **0.9675** | — |
+| Dixon-Coles baseline | 0.9908 | — |
 
-*(The `market_blind` track shows the same ordering, ~0.010-0.030 worse per model — put it in backup.)*
+*(The five-fold view is still reported in `reports/summary.md`; it reorders the
+weakest configurations — logistic in particular is hit hardest by the COVID fold
+— but never changes the champion. The `market_blind` track shows the same
+ordering, ~0.010-0.030 worse per model — put it in backup.)*
 
 **Three takeaways (callout box):**
-- **The market wins everywhere** — every fold, every league, both tracks; the smallest gap anywhere is the champion's **+0.0073**, still positive
+- **The market wins everywhere** — every fold, every league, both tracks; the smallest gap anywhere is the champion's **+0.0074**, still positive
 - **`market_aware` still loses** — even handed the closing line, the model *degrades* it; and a round of engineered features (opponent strength, venue, congestion, standing) left the gap unchanged — nothing the market hasn't already priced
-- **Tuned boosting > stacking > logistic > neural net**; nine model types all sit **between** the two baselines. The neural net underperforms at ~14k rows — deep learning does not pay off here
+- **Tuned boosting > stacking > logistic > neural net**; seven of nine configurations sit **between** the two baselines. The neural net underperforms at ~14k rows — deep learning does not pay off here
 
 **Speaker note:** "Champion holdout: 0.9853 vs market 0.9784 — the gap narrows on holdout but never closes. Consistent story. We threw nine model families at it, tuned three of them, engineered a dozen more features, and the market still won."
 
@@ -179,7 +185,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 ## Slide 12 — Deployment (Containerized API)
 
 **On slide:**
-- **Docker + FastAPI**, `docker compose up --build` -> API at `:8000/docs`, dashboard at `:8501`
+- **Docker + FastAPI**, `docker compose up --build` -> API at `:8000/docs`, dashboard at `:8501`, MLflow UI at `:5001`
 - Model is **swappable by alias** — replacing it is a re-registration + restart, zero serving-code changes
 
 | Endpoint | Purpose |
@@ -187,6 +193,7 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 | `GET /health` | liveness + loaded model version |
 | `GET /model` | champion metadata + feature contract |
 | `POST /predict` | score explicit feature payloads |
+| `POST /predict/matches` | re-score historical matches by id |
 | `GET /predict/upcoming` | fetch fixtures, score, flag value |
 | `GET /metrics` | request counters |
 
@@ -215,18 +222,18 @@ ADSP 32021 MLOps Final Project. Slide-ready content with real values from
 
 ## Slide 14 — Drift Simulation & Anomaly Verification (required stress test)
 
-**Screenshot:** `reports/drift/stress_test.png` — the red "MONITOR ALERT — 3/3
-injected faults caught" report. Same view in the dashboard's **Stress test** tab.
+**Screenshot:** the dashboard's **Stress tests** tab (fourth tab), or
+`reports/drift/stress_test.html` — the red "3/3 injected faults caught" cards.
 
 **On slide — baseline + three injected faults, scored through the deployed API:**
-- **Baseline:** clean 2025-26 holdout (1,609 rows) -> log loss **0.9796**, within tolerance of the monitoring baseline
+- **Baseline:** clean 2025-26 holdout (1,727 rows) -> log loss **0.9853** vs market **0.9784**, scored over HTTP through the running container
 - **Each fault is caught by a *different* detector** (the whole point):
 
 | Fault | Corruption | What caught it |
 |---|---|---|
-| out_of_bounds | every feature 5-15x past its range | **84/86** features drift + prediction PSI **12.5** |
-| swapped_columns | home/away swapped, market price flipped | log loss **+0.405** (performance) — only 13/86 marginals move |
-| schema_break | xG feature family dropped | **12 missing** features (schema) — log loss barely moves |
+| out_of_bounds | every feature 5-15x past its range | **84/86** features drift + prediction PSI **10.71** |
+| swapped_columns | home/away swapped, market price flipped | log loss **+0.395** (performance) — only 13/86 marginals move |
+| schema_break | xG feature family dropped | **12 missing** features (schema) — log loss moves just **+0.0014** |
 
 **Speaker note:** "Baseline validation first — the clean holdout passes. Then we
 inject faults and send them to the *deployed model*. The lesson is the table's
@@ -242,7 +249,7 @@ complements Slide 13, which is a *real* detected shift rather than an injected o
 **On slide:**
 - **The negative result IS the deliverable** — and it's well-evidenced:
   - No model beats the market on any fold, league, or track — nine model families, three of them hyperparameter-tuned
-  - Even a principled Dixon-Coles goals model (0.9926) and tuned CatBoost, the champion (0.9766), fall short of 0.9691
+  - Even a principled Dixon-Coles goals model (0.9928) and tuned CatBoost, the champion (0.9766), fall short of 0.9693
   - A round of theory-driven feature engineering (opponent strength, venue-split form, congestion, standing) **left the gap unchanged** — further evidence the signal isn't there
   - No value threshold yields a profit whose CI excludes zero; CLV is negative throughout
 - **Interpretation:** the top-5 closing line is near-efficient — there is no exploitable pre-kickoff edge in public xG/Elo/form data
@@ -274,8 +281,8 @@ complements Slide 13, which is a *real* detected shift rather than an injected o
 
 **On slide:**
 - **github.com/arenmizuno/beating-1X2** (public)
-- Reproduce locally: `pip install -r requirements.txt` -> run stages -> `docker compose up`; cold run < 10 min
-- **84 hermetic tests** (no network) · CI **mutation-tests the leakage guard** (flips `shift(1)`->`shift(0)`, fails if tests stay green)
+- Reproduce locally: create and **activate** `.venv` -> `pip install -r requirements-ops.txt` -> `dvc repro` -> `docker compose up`; cold run < 10 min
+- **98 hermetic tests** (no network) · CI **mutation-tests the leakage guard** (flips `shift(1)`->`shift(0)`, fails if tests stay green)
 - Questions?
 
 **Speaker note:** "The leakage mutation test is the detail worth landing: a guard that never fails on a broken build is no guard at all."
