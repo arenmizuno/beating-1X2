@@ -301,18 +301,18 @@ fast map from the rubric to the code and the sections below.
 | Requirement | Implementation | Section |
 |---|---|---|
 | Dataset, target, evaluation metric | `src/ingest_*.py`, `src/metrics.py` | [1. Data, features, and baselines](#1-data-features-and-baselines) |
-| Test set isolated until production validation | `src/splits.py` (walk-forward; sealed 2025-26) | [1](#1-data-features-and-baselines) |
+| Test set isolated until production validation | `src/splits.py` (walk-forward; sealed 2025-26) | [1. Data, features, and baselines](#1-data-features-and-baselines) |
 | Automated orchestration (Prefect / equivalent) | `flows.py` (Prefect), `dvc.yaml` (DVC) | [2. Pipeline automation and experiment tracking](#2-pipeline-automation-and-experiment-tracking) |
-| Experiment tracking and model logging (MLflow) | `src/train.py`, `mlruns/` | [2](#2-pipeline-automation-and-experiment-tracking) |
-| Model Registry with semantic versioning | `src/train.py`, `reports/champion.json` | [2](#2-pipeline-automation-and-experiment-tracking) |
+| Experiment tracking and model logging (MLflow) | `src/train.py`, `mlruns/` | [2. Pipeline automation and experiment tracking](#2-pipeline-automation-and-experiment-tracking) |
+| Model Registry with semantic versioning | `src/train.py`, `reports/champion.json` | [2. Pipeline automation and experiment tracking](#2-pipeline-automation-and-experiment-tracking) |
 | Containerized deployment (Docker + FastAPI) | `Dockerfile`, `docker-compose.yml`, `src/api.py` | [3. Containerization and deployment](#3-containerization-and-deployment) |
-| Real-time predictions from test inputs | `src/api.py`, `src/predict.py` | [3](#3-containerization-and-deployment) |
+| Real-time predictions from test inputs | `src/api.py`, `src/predict.py` | [3. Containerization and deployment](#3-containerization-and-deployment) |
 | Monitoring framework / dashboard | `src/drift.py`, `dashboard/app.py` (Evidently + custom) | [4. Production monitoring and drift simulation](#4-production-monitoring-and-drift-simulation) |
-| Baseline validation via the deployed API | `src/stress_test.py` | [4](#4-production-monitoring-and-drift-simulation) |
-| Drift simulation (corrupted test data) | `src/stress_test.py` | [4](#4-production-monitoring-and-drift-simulation) |
-| Anomaly verification and alerting | `src/stress_test.py`, `dashboard/app.py` | [4](#4-production-monitoring-and-drift-simulation) |
-| README, dependency files, Dockerfile | `README.md`, `requirements*.txt`, `Dockerfile` | (this file) |
-| Presentation slides | `beating-the-ops.pptx` | [Presentation and responsible use](#presentation-and-responsible-use) |
+| Baseline validation via the deployed API | `src/stress_test.py` | [4. Production monitoring and drift simulation](#4-production-monitoring-and-drift-simulation) |
+| Drift simulation (corrupted test data) | `src/stress_test.py` | [4. Production monitoring and drift simulation](#4-production-monitoring-and-drift-simulation) |
+| Anomaly verification and alerting | `src/stress_test.py`, `dashboard/app.py` | [4. Production monitoring and drift simulation](#4-production-monitoring-and-drift-simulation) |
+| README, dependency files, Dockerfile | `README.md`, `requirements*.txt`, `Dockerfile` | [Repository structure](#repository-structure) |
+| Presentation slides | `beating-the-ops.pptx` | [Repository structure](#repository-structure) |
 
 ---
 
@@ -772,16 +772,3 @@ ruff check .
 - Prediction-market prices (Kalshi, Polymarket) as a live model input.
 - Historical injury data, if a reliable free feed becomes available.
 - Training on more data as further seasons complete.
-
----
-
-## Presentation and responsible use
-
-- **Slides:** `beating-the-ops.pptx` — the final presentation deck.
-- **Repository:** [github.com/arenmizuno/beating-1X2](https://github.com/arenmizuno/beating-1X2)
-
-Coursework for UChicago ADSP 32021, for academic purposes only. Nothing here is
-betting advice, and the results specifically indicate no exploitable edge. Data
-is used under each source's terms: football-data.co.uk and ClubElo publish for
-free public use; Understat is accessed at a deliberately throttled rate with
-aggressive local caching.
