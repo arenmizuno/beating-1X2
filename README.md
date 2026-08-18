@@ -1,12 +1,41 @@
-# beating-1X2 — ADSP 32021 Final Project
+# beating-1X2
 
-**Can an expected-goals model beat football's 1X2 market?**
+## ADSP 32021 – MLOps
+### Final Project – University of Chicago
 
-Multiclass prediction of association-football match outcomes (home win / draw /
-away win) from pre-kickoff features, compared against the betting market's
-implied probabilities to flag fixtures where the two disagree.
+**Instructor:** Shaddy Abado
 
-**Team:** Aren Mizuno · Nick Dhaliwal · Arthur Acker · Nick Mikhail
+**Term:** Summer 2026
+
+---
+
+## Team Members
+
+- Aren Mizuno
+- Nick Dhaliwal
+- Arthur Acker
+- Nick Mikhail
+
+---
+
+# Project Overview
+
+beating-1X2 is an end-to-end MLOps pipeline that asks whether a machine-learning
+model can beat football's 1X2 betting market — predicting match outcomes (home
+win / draw / away win) from pre-kickoff signals and comparing them against the
+market's own implied probabilities.
+
+The system ingests, models, serves and monitors match data to:
+- predict 1X2 outcomes from leakage-safe pre-kickoff features,
+- devig bookmaker closing odds into a vig-free market baseline to beat,
+- flag value bets where model probability exceeds the market by a threshold,
+- serve the champion model through a containerized API and dashboard,
+- and monitor feature, target and calibration drift in production.
+
+The pipeline is built to establish its result *credibly* — walk-forward splits,
+a sealed holdout scored only through the deployed API, a market baseline as a
+leakage tripwire, and bootstrap confidence intervals on every economic claim —
+so the finding can be trusted whichever way it lands.
 
 **Scope:** top-5 European leagues (Premier League, La Liga, Bundesliga, Serie A,
 Ligue 1), seasons 2018-19 through 2025-26. 14,285 matches ingested, 13,786 after
@@ -20,37 +49,48 @@ requiring sufficient match history for both sides.
 money.** That is the finding, not a failure of the build — and the pipeline is
 designed to establish it credibly rather than to hide it.
 
-Walk-forward mean multiclass log loss (lower is better), scored on identical
-matches for model and market:
+Multiclass log loss over the **four common walk-forward folds** — the
+equal-comparison protocol used to select the champion, scored on identical
+matches for model and market (lower is better):
 
 | track | model | log loss | vs market |
 |---|---|---|---|
-| **market_aware** | **catboost_tuned (champion)** | **0.9766** | **+0.0073** |
-| market_aware | xgboost_tuned | 0.9790 | +0.0097 |
-| market_aware | logistic | 1.0012 | +0.0319 |
-| market_blind | catboost_tuned | 0.9895 | +0.0202 |
-| — | **market (vig-free closing line)** | **0.9693** | — |
-| — | Dixon-Coles goals baseline | 0.9926 | — |
+| **market_aware** | **catboost_tuned (champion)** | **0.9749** | **+0.0074** |
+| market_aware | xgboost_tuned | 0.9751 | +0.0076 |
+| market_aware | stacking | 0.9779 | +0.0104 |
+| market_aware | logistic | 0.9850 | +0.0175 |
+| market_blind | catboost_tuned | 0.9863 | +0.0188 |
+| — | **market (vig-free closing line)** | **0.9675** | — |
+| — | Dixon-Coles goals baseline | 0.9908 | — |
+
+Across the full walk-forward (each configuration on all its available folds) the
+market baseline is 0.9693 and Dixon-Coles 0.9926; see `reports/summary.md` for
+that per-configuration detail. On the sealed **2025-26 holdout**, scored once
+through the deployed API, the champion posts 0.9853 against the market's 0.9784 —
+a stable +0.0069 gap.
 
 Three things worth drawing out:
 
 - **The market wins everywhere**, on every fold, every league, and both tracks —
-  across nine model families, three of them hyperparameter-tuned.
+  across six model families and nine configurations per track (18 runs in total),
+  three of them hyperparameter-tuned.
 - **`market_aware` still loses.** Even when handed the closing-line probability
   as an input feature, the model degrades it, and a round of engineered features
   (opponent strength, venue-split form, congestion, standing) left the gap
   unchanged. The features carry nothing the market has not already priced.
 - **Tuned boosting is the best of the field** — tuned CatBoost and XGBoost lead,
-  logistic and the neural net trail — yet every configuration still sits between
-  the market and the Dixon-Coles baseline.
+  the neural net and untuned LightGBM trail — yet every configuration still sits
+  between the market and the Dixon-Coles baseline.
 
-Economically, no configuration is profitable, and no edge threshold anywhere in
-a 0.02–0.20 sweep produces an ROI whose 95% confidence interval excludes zero.
-Closing-line value is negative throughout (the champion's mean CLV is −3.4%; only
-23–46% of selections beat the close), which is the professional-standard verdict
-that there is no exploitable signal here.
-
-See `reports/summary.md` for the generated detail.
+Economically, no configuration is profitable. The champion's flat-stakes ROI is
+−1.6% over 2,429 walk-forward bets (95% bootstrap CI [−10.0%, +7.8%], 31.2%
+strike rate), and no edge threshold anywhere in a 0.02–0.20 sweep produces an ROI
+whose 95% confidence interval excludes zero. The best point estimate across every
+model and threshold is +0.03% — the champion on a relative-edge rule, worth +0.4
+units on 1,319 bets with a CI of [−14.9%, +15.5%], which is pure noise. Closing-line
+value is negative throughout (the champion's mean CLV is −3.4%; only 23–46% of
+selections beat the close), the professional-standard verdict that there is no
+exploitable signal here.
 
 ---
 
@@ -69,11 +109,11 @@ See `reports/summary.md` for the generated detail.
 │   ├── ingest_understat.py       # stage 1b: expected goals
 │   ├── ingest_clubelo.py         # stage 1c: club Elo ratings
 │   ├── harmonize.py              # stage 2: team-name matching + match join
-│   ├── market.py                 # stage 3: odds -> vig-free probabilities
+│   ├── market.py                 # stage 3: odds -> Shin vig-free probabilities
 │   ├── features.py               # stage 4: leakage-safe feature table
 │   ├── splits.py                 # stage 5: walk-forward temporal splits
 │   ├── metrics.py                # scoring rules + calibration diagnostics
-│   ├── train.py                  # stage 6: both tracks, both models, registry
+│   ├── train.py                  # stage 6: both tracks, nine configs, registry
 │   ├── evaluate.py               # stage 7: statistical + economic evaluation
 │   ├── drift.py                  # stage 8: feature/target/calibration drift
 │   ├── stress_test.py            # stage 8b: injected-fault drift stress test
@@ -82,7 +122,7 @@ See `reports/summary.md` for the generated detail.
 │   ├── predict.py                # shared scoring path (API + batch)
 │   └── api.py                    # FastAPI service
 ├── dashboard/app.py             # Streamlit monitoring dashboard
-├── tests/                       # 86 hermetic tests, no network
+├── tests/                       # 98 hermetic tests, no network
 ├── data/
 │   ├── mappings/team_aliases_manual.csv   # committed, hand-verified
 │   ├── raw/ interim/ processed/  # gitignored; rebuilt by the pipeline
@@ -290,11 +330,11 @@ market. That is why the threshold sweep is in the deliverable.
 
 ### Statistical honesty in the backtest
 
-Confidence intervals are not decoration here. A few hundred flagged bets at ~5.0
-average odds produce enormously noisy ROI — the sweep's best point estimate is
-+6.5%, with a 95% interval of [−17.8%, +34.2%] on 362 bets and negative results
-at neighbouring thresholds. Reporting that number without its interval would be
-noise-mining. Every economic figure carries a bootstrap CI.
+Confidence intervals are not decoration here. A thousand-odd flagged bets at
+mean odds near 6 produce enormously noisy ROI — the sweep's best point estimate
+is +0.03%, with a 95% interval of [−14.9%, +15.5%] on 1,319 bets and negative
+results at neighbouring thresholds. Reporting that number without its interval
+would be noise-mining. Every economic figure carries a bootstrap CI.
 
 ---
 
@@ -319,8 +359,9 @@ noise-mining. Every economic figure carries a bootstrap CI.
 ### The model is swappable by design
 
 Nothing downstream names an algorithm. `src/train.py` registers the best
-configuration — selected by **walk-forward** mean log loss without scoring the
-holdout — to the MLflow Model Registry as `beating-1x2` with a `@champion`
+configuration — currently `market_aware / catboost_tuned`, registry version 5,
+`model_semver` 1.0.1, selected by **walk-forward** mean log loss without scoring
+the holdout — to the MLflow Model Registry as `beating-1x2` with a `@champion`
 alias. The sealed test season is first scored later through the deployed API. A
 `model_contract.json` artifact travels with the model carrying its feature list
 and exact design-matrix column order.
@@ -462,24 +503,32 @@ p < 0.0001: home-win rate fell to 39.8% from 44–45% either side, matches havin
 been played in empty stadiums. It is also the worst fold for every model
 configuration. That is a real detected shift, not injected synthetic noise.
 
+Feature drift is judged across **54 monitored features** at KS α = 0.01 and
+PSI > 0.20 (a feature must trip both). The seasons after the reference flag 2–6
+features each — 2 in 2021-22, 6 in 2024-25 — consistent with roster and schedule
+churn rather than a structural break.
+
 Calibration decay is tracked as the **gap to the market**, not raw log loss: a
 season where everyone scored worse was a hard season; a season where only we
-scored worse is model decay.
+scored worse is model decay. The worst gap is +0.095 (market_blind / logistic,
+2020-21), the same COVID season that trips the target-drift alarm.
 
 ### Drift stress test
 
 `src/drift.py` detects a *real* historical shift. `src/stress_test.py` does the
 complementary thing: it validates a serving baseline, then injects **known
-faults** and confirms the monitor catches each. It scores the complete clean
-holdout through the deployed API (`API_URL`, defaulting to localhost) and fails
-closed if the service is unavailable, then re-scores three corrupted copies.
-An explicit `--in-process` mode exists only for tests and local diagnostics:
+faults** and confirms the monitor catches each. It first scores the clean
+2025-26 holdout (1,727 rows) through the deployed API (`API_URL`, defaulting to
+localhost), posting 0.9853 log loss against the market's 0.9784 (a +0.0069 gap),
+and fails closed if the service is unavailable. Only after that baseline passes
+does it re-score three corrupted copies. An explicit `--in-process` mode exists
+only for tests and local diagnostics:
 
 | Fault | Corruption | Caught by |
 |---|---|---|
-| `out_of_bounds` | every feature pushed far past its range | 84/86 features drift (KS+PSI), prediction PSI 10.71 |
-| `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.40 — **performance**, not input drift (only 13/86 marginals move) |
-| `schema_break` | the xG feature family dropped | 12 missing features — **schema**, though log loss barely moves |
+| `out_of_bounds` | every feature pushed 5–15× past its range | 84/86 features drift (KS+PSI), prediction PSI 10.71 |
+| `swapped_columns` | home/away columns swapped, market price flipped | log loss +0.395, prediction PSI 0.36 — **performance**, not input drift (only 13/86 marginals move) |
+| `schema_break` | the xG feature family dropped | 12 missing features — **schema**, though log loss barely moves (+0.001) |
 
 Each fault trips a *different* detector, which is the point: marginal input-drift
 monitoring alone would miss the column swap, and performance monitoring alone
