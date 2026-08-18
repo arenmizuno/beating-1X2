@@ -98,10 +98,14 @@ exploitable signal here.
 
 ```
 .
+├── README.md                    # this file
+├── beating-the-ops.pptx         # final presentation deck (the slides)
 ├── params.yaml                  # every tunable; a run = this file + the commit
 ├── dvc.yaml                     # the reproducible stage DAG
 ├── flows.py                     # Prefect orchestration
 ├── Dockerfile / docker-compose.yml
+├── requirements*.txt            # runtime, ops, and dev dependency pins
+├── .github/workflows/ci.yml     # lint, tests, and the leakage mutation guard
 ├── src/
 │   ├── config.py                 # paths, constants, params loader
 │   ├── fetch.py                  # cached, throttled HTTP for all sources
@@ -130,36 +134,112 @@ exploitable signal here.
 └── mlruns/                       # gitignored MLflow store + model registry
 ```
 
-## Running it
+---
 
-```bash
-python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.txt
+## System architecture
+
+Two orchestrators drive one DAG: **DVC** is the reproducible build system,
+**Prefect** is the scheduler and runtime. The trained champion is resolved by
+alias at serve time, and the deployed API is itself the scoring path used for
+monitoring.
+
+```
+TRAINING
+  ingest (3 sources)            football-data · Understat · ClubElo
+        │  concurrent, retried (Prefect), cached + throttled
+        ▼
+  harmonize                     Hungarian team-name matching → 99.99% join
+        ▼
+  market (devig)                Shin (1993) → vig-free probabilities
+        ▼
+  features                      86 leakage-guarded, shift-then-roll features
+        ▼
+  splits + train                5 walk-forward folds · 18 configs · 2 tracks
+        ▼
+  evaluate + register           MLflow tracking → Model Registry @champion
+
+SERVING                         Docker + FastAPI (docker compose up)
+  resolve alias  ──►  predict + value flags  ──►  monitoring (HTTP holdout + alerts)
+  models:/beating-1x2@champion                     drift dashboard (Streamlit)
 ```
 
-Activate it before running anything else:
+See `beating-the-ops.pptx` (System Architecture slide) for the visual version.
+
+---
+
+## Reproducing the pipeline locally
+
+### 1. Install
+
+The runtime dependencies (model + API) are separated from the orchestration and
+monitoring layer, so the served container stays small and does not carry a
+workflow engine:
+
+```bash
+python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements-ops.txt
+```
+
+`requirements-ops.txt` pulls in `requirements.txt` and adds Prefect, DVC,
+Evidently and Streamlit. Then **activate the environment before running anything
+else**:
 
 ```bash
 source .venv/bin/activate
 ```
 
 This matters more than the usual boilerplate. The DVC and Prefect entry points
-further down invoke each stage as a bare `python -m src.<stage>`, so an
-unactivated shell runs them under whatever interpreter is first on `PATH`. On a
-machine with conda that is the base environment, which happens to have pandas
-and pyarrow but not catboost -- ingestion through `features` succeeds, and the
-pipeline then dies at `train` with `ModuleNotFoundError: No module named
-'catboost'`.
+invoke each stage as a bare `python -m src.<stage>`, so an unactivated shell runs
+them under whatever interpreter is first on `PATH`. On a machine with conda that
+is the base environment, which happens to have pandas and pyarrow but not
+catboost — ingestion through `features` succeeds, and the pipeline then dies at
+`train` with `ModuleNotFoundError: No module named 'catboost'`.
 
-The orchestration and monitoring layer (DVC, Prefect, Evidently, Streamlit) is
-installed separately, so the served container does not carry a workflow engine:
+### 2. Run the full pipeline
+
+The two automated entry points build the same DAG; pick one. **DVC** rebuilds
+only what changed (editing a hyperparameter reruns training and evaluation, not
+the hour of ingestion above it):
 
 ```bash
-pip install -r requirements-ops.txt
+dvc repro
 ```
 
-Then, in order (each stage is independently runnable and caches its downloads).
-The explicit `./.venv/bin/python` prefix below is redundant once the environment
-is active; it is spelled out so each command also works on its own:
+**Prefect** runs the flow end to end with retries, concurrency and run
+observability (the three ingestion tasks run concurrently; everything downstream
+is sequential):
+
+```bash
+python flows.py
+```
+
+A full cold run takes under ten minutes, most of it polite rate-limiting on the
+three data sources (ClubElo alone is ~155 requests, about 5.5 minutes). Once the
+raw cache exists, everything from `harmonize` onward reruns in about 90 seconds.
+
+Two behaviors to know:
+
+- The six committed hyperparameter-search tables are audited training inputs and
+  are **reused by default** (`train.reuse_search_results: true`). Set that
+  parameter to `false` to rerun the full Optuna search; the selected parameters
+  are still evaluated solely on walk-forward folds.
+- `train` is **not idempotent by design**. It refuses to register a second
+  registry version under a `model_semver` that is already claimed, so re-running
+  a completed pipeline unchanged fails at that stage — deliberately, since an
+  identical model is not a new release. Bump `model_semver` in `params.yaml` when
+  you intend one.
+
+To refresh and score only upcoming fixtures (the recurring scoring path):
+
+```bash
+python flows.py --scoring
+```
+
+### 3. Run individual stages (optional)
+
+Each stage is independently runnable and caches its downloads, which is handy for
+a first cold run or for debugging. The explicit `./.venv/bin/python` prefix is
+redundant once the environment is active; it is spelled out so each command also
+works on its own:
 
 ```bash
 ./.venv/bin/python -m src.ingest_footballdata
@@ -177,21 +257,117 @@ is active; it is spelled out so each command also works on its own:
 ./.venv/bin/python -m src.features && ./.venv/bin/python -m src.train && ./.venv/bin/python -m src.evaluate
 ```
 
-Inspect experiment tracking with:
+### 4. Serve the API and dashboards
 
+```bash
+docker compose up --build
+```
+
+This starts three services: the API at `http://localhost:8000/docs`, the
+monitoring dashboard at `http://localhost:8501`, and the MLflow UI at
+`http://localhost:5001`. The MLflow service publishes container port 5000 as host
+5001 because macOS Control Center (AirPlay Receiver) holds 5000 and silently
+shadows the UI. Or run the pieces directly:
+
+```bash
+uvicorn src.api:app --reload
+```
+```bash
+streamlit run dashboard/app.py
+```
 ```bash
 ./.venv/bin/mlflow ui --backend-store-uri mlruns --port 5001
 ```
 
-A full cold run takes under ten minutes, most of it polite rate-limiting on the
-three data sources (ClubElo alone is ~155 requests, about 5.5 minutes). Once the
-raw cache exists, everything from `harmonize` onward reruns in about 90 seconds.
+### 5. Version the data with the DVC remote
+
+Generated artifacts are pushed to the DVC remote declared in `.dvc/config`, so a
+fresh clone can recover the exact data a run produced instead of rebuilding it:
+
+```bash
+dvc push
+```
+```bash
+dvc pull
+```
 
 ---
 
-## Design decisions worth defending
+## Assignment coverage
 
-### The market data source changed from the proposal
+Where each required MLOps lifecycle stage and deliverable is implemented, for a
+fast map from the rubric to the code and the sections below.
+
+| Requirement | Implementation | Section |
+|---|---|---|
+| Dataset, target, evaluation metric | `src/ingest_*.py`, `src/metrics.py` | [1. Data, features, and baselines](#1-data-features-and-baselines) |
+| Test set isolated until production validation | `src/splits.py` (walk-forward; sealed 2025-26) | [1](#1-data-features-and-baselines) |
+| Automated orchestration (Prefect / equivalent) | `flows.py` (Prefect), `dvc.yaml` (DVC) | [2. Pipeline automation and experiment tracking](#2-pipeline-automation-and-experiment-tracking) |
+| Experiment tracking and model logging (MLflow) | `src/train.py`, `mlruns/` | [2](#2-pipeline-automation-and-experiment-tracking) |
+| Model Registry with semantic versioning | `src/train.py`, `reports/champion.json` | [2](#2-pipeline-automation-and-experiment-tracking) |
+| Containerized deployment (Docker + FastAPI) | `Dockerfile`, `docker-compose.yml`, `src/api.py` | [3. Containerization and deployment](#3-containerization-and-deployment) |
+| Real-time predictions from test inputs | `src/api.py`, `src/predict.py` | [3](#3-containerization-and-deployment) |
+| Monitoring framework / dashboard | `src/drift.py`, `dashboard/app.py` (Evidently + custom) | [4. Production monitoring and drift simulation](#4-production-monitoring-and-drift-simulation) |
+| Baseline validation via the deployed API | `src/stress_test.py` | [4](#4-production-monitoring-and-drift-simulation) |
+| Drift simulation (corrupted test data) | `src/stress_test.py` | [4](#4-production-monitoring-and-drift-simulation) |
+| Anomaly verification and alerting | `src/stress_test.py`, `dashboard/app.py` | [4](#4-production-monitoring-and-drift-simulation) |
+| README, dependency files, Dockerfile | `README.md`, `requirements*.txt`, `Dockerfile` | (this file) |
+| Presentation slides | `beating-the-ops.pptx` | [Presentation and responsible use](#presentation-and-responsible-use) |
+
+---
+
+## 1. Data, features, and baselines
+
+Three third-party sources are joined into one row per match, labelled with the
+1X2 outcome and enriched with the market's own price. The test season is sealed
+away before any modelling begins.
+
+### The dataset and target
+
+14,285 matches are ingested across the top-5 European leagues (Premier League, La
+Liga, Bundesliga, Serie A, Ligue 1) for seasons 2018-19 through 2025-26; 13,786
+remain usable once rolling metrics require sufficient prior history for both
+sides. The target is the three-way full-time result — home win (44%), draw (26%),
+away win (30%). Home advantage is persistent: the home-win rate holds at 44–45%
+in every season **except 2020-21**, when it fell to 39.8% with empty stadiums —
+a dip that returns as detected target drift in section 4.
+
+### Three sources, one row per match
+
+- **football-data.co.uk** — results and closing/opening bookmaker odds.
+- **Understat** — shot-level expected goals (xG).
+- **ClubElo** — club strength ratings.
+
+After harmonization the cross-source join rate is **99.99%** (14,284 / 14,285).
+
+### Evaluation metric: multiclass log loss
+
+The primary metric is **multiclass log loss**, a proper scoring rule that
+punishes overconfident probabilities. It is the right lens for betting, where a
+calibrated probability matters more than raw accuracy — and accuracy alone is
+useless here, since a 44% home-win prior gets you most of the way with no skill
+at all. "Beating the market" means a **lower log loss than the vig-free closing
+line**, not merely higher accuracy.
+
+### Two baselines to beat
+
+- **The market (vig-free closing line): 0.9675** on the four common folds (0.9693
+  across the full walk-forward). Bookmaker margin is stripped with the **Shin
+  (1993)** method, recovering the true implied probabilities. This is the sharpest
+  and hardest line to beat and the standard academic benchmark.
+- **Dixon-Coles Poisson goals model: 0.9908** (0.9926 full walk-forward). A
+  reasonable price-blind control, deliberately kept out of the feature set so it
+  stays an independent comparison.
+
+### Split discipline
+
+Five walk-forward evaluation folds train on all prior seasons and score the next.
+Champion selection uses the **four folds shared by every candidate**, so the
+comparison is apples-to-apples. The **2025-26 season is held out entirely** and
+scored only later, through the deployed API, as production validation. There is
+**no random K-fold anywhere** — every split is forward in time.
+
+### Design decision: the market data source changed from the proposal
 
 The proposal named the Polymarket/Kalshi APIs as the source of market-implied
 probabilities. **They cannot serve that role.** Neither venue has per-match
@@ -211,7 +387,7 @@ Prediction markets are better positioned as a *live inference-time* input in a
 later phase, which is a stronger story anyway: backtested against bookmaker
 closing lines, served against live prediction-market prices.
 
-### Injury and availability flags were dropped
+### Design decision: injury and availability flags were dropped
 
 The proposal listed them as features. No reliable free historical injury feed
 exists for 2018-2026 across five leagues, and confirmed lineups only publish
@@ -219,7 +395,7 @@ about an hour before kickoff, so even a live source could not retro-fill the
 training set. Rather than ship a feature we could not source, it is cut and
 recorded here.
 
-### Odds column schema drifts across seasons
+### Design decision: odds column schema drifts across seasons
 
 football-data changed its aggregate-odds columns around 2019-20: the `Bb*`
 (Betbrain) family disappeared and `Max*`/`Avg*` replaced it. Ingestion therefore
@@ -269,6 +445,18 @@ This surfaced three genuine reschedulings rather than three bugs, including
 Udinese–Roma, abandoned on 2024-04-14 after Evan Ndicka collapsed and completed
 on 2024-04-25. See `reports/date_disagreements.csv`.
 
+### 86 features in two generations
+
+- **Base:** rolling form over 5 and 10 matches, Elo ratings, rest days, and
+  Dixon-Coles attack/defense strengths.
+- **Engineered:** strength of schedule, Elo over-performance, home/away split
+  form, EWMA-weighted form, fixture congestion, season points per game, and a
+  promoted-team flag.
+
+The honest result: the engineered generation left the gap to the market
+**unchanged**. Two tracks consume these features — `market_blind` (features only)
+and `market_aware` (the closing line added as an input).
+
 ### Leakage discipline
 
 The single failure mode that would invalidate everything, so the handling is
@@ -298,6 +486,49 @@ The strongest evidence that this worked: the market baseline scores 0.9693 log
 loss, squarely inside the 0.95–1.02 band a sharp closing line should occupy. A
 model that beat that by a wide margin would be evidence of leakage, not skill.
 
+---
+
+## 2. Pipeline automation and experiment tracking
+
+### Orchestration: what DVC does and what Prefect does
+
+A fair criticism of the original proposal was that it named two things that look
+like orchestrators. They do different jobs:
+
+- **DVC** (`dvc.yaml`) is the build system. It declares each stage's inputs and
+  outputs so `dvc repro` rebuilds only what changed — editing a model
+  hyperparameter reruns training and evaluation, but not the hour of ingestion
+  above it. Run `dvc dag` to see the graph.
+- **Prefect** (`flows.py`) is the scheduler and runtime. It handles retries
+  against flaky third-party sources, concurrency, and run observability. The
+  three ingestion tasks run concurrently with retries; everything downstream is
+  sequential.
+
+Both shell out to `python -m src.<stage>`, so activate the virtualenv first — see
+[Reproducing the pipeline locally](#reproducing-the-pipeline-locally) for the
+commands and for what happens when you do not.
+
+### Models and modeling approach
+
+Two tracks answer two questions. `market_blind` uses features only: *can we
+predict outcomes from the game itself?* `market_aware` adds the closing line as a
+feature: *given the market's own number, can we improve on it?*
+
+Six model families run in each track:
+
+| family | what it is |
+|---|---|
+| Logistic regression | linear and interpretable |
+| LightGBM | gradient-boosted trees |
+| XGBoost | gradient-boosted trees |
+| CatBoost | gradient-boosted trees |
+| MLP | neural net (multilayer perceptron) |
+| Stacking | logistic meta-learner over the calibrated boosters |
+
+Each booster also runs a hyperparameter-tuned variant, giving **9 configurations
+per track and 18 runs in total**. Every model is probability-calibrated, because
+betting needs trustworthy probabilities, not just correct rankings.
+
 ### Calibration: sigmoid, and it was measured
 
 Isotonic regression was the initial choice. With only one season (~1,700 rows)
@@ -312,64 +543,64 @@ zero asserts an outcome is impossible, makes log loss undefined when it happens,
 and implies an unbounded Kelly stake. The floor-hit rate is logged per fold; with
 sigmoid it never binds (0.000%).
 
-### Why the value rule fires on longshots
+### Experiment tracking and model selection
 
-At the proposal's 0.05 absolute edge threshold the rule flags **74–89% of all
-fixtures** at mean odds above 4.7. A fixed 0.05 gap means very different things
-at different prices: against a market probability of 0.20 it is a 25% relative
-overestimate, against 0.67 only 7.5%. Since the model is less sharp than the
-market, it holds more probability mass on longshots nearly everywhere.
+MLflow tracks every run's parameters, metrics and artifacts. The registry holds
+`beating-1x2` with a `@champion` alias and tags. The 18 candidate configurations
+are compared on walk-forward log loss, and the winner is selected on the four
+common folds **without ever scoring the holdout**:
 
-Adding a relative-edge filter on top does **not** fix this — it makes it
-marginally worse (mean odds rose 5.28 → 5.67), because once a 0.05 absolute edge
-is required a longshot at p=0.10 clears a 20% relative bar automatically, so the
-relative test only bites favourites. Both variants are reported side by side.
+- **Champion:** `market_aware / catboost_tuned`, 86 features, registry version 5,
+  `model_semver` **1.0.1**, selected at **0.9749** on the four common folds.
+- A `model_contract.json` artifact travels with the model carrying its feature
+  list and exact design-matrix column order.
+- `reports/champion.json` records which configuration won and by how much, so
+  promotion is auditable.
 
-The deeper point: no selection rule rescues a model less accurate than the
-market. That is why the threshold sweep is in the deliverable.
+MLflow's registry still assigns integer versions; the release identifier
+`model_semver` is validated from `params.yaml`, stored in the model contract and
+registry tags, and returned by every model-bearing API response.
 
-### Statistical honesty in the backtest
+### Evaluation and the value-bet backtest
 
-Confidence intervals are not decoration here. A thousand-odd flagged bets at
-mean odds near 6 produce enormously noisy ROI — the sweep's best point estimate
-is +0.03%, with a 95% interval of [−14.9%, +15.5%] on 1,319 bets and negative
-results at neighbouring thresholds. Reporting that number without its interval
-would be noise-mining. Every economic figure carries a bootstrap CI.
+`src/evaluate.py` produces both the probability-quality table (`reports/summary.md`)
+and the economic backtest (`reports/value_backtest.md`), with a threshold sweep in
+`reports/roi_by_threshold.csv`. Two analyses are worth calling out.
+
+**Why the value rule fires on longshots.** At the proposal's 0.05 absolute edge
+threshold the rule flags **74–89% of all fixtures** at mean odds above 4.7. A
+fixed 0.05 gap means very different things at different prices: against a market
+probability of 0.20 it is a 25% relative overestimate, against 0.67 only 7.5%.
+Since the model is less sharp than the market, it holds more probability mass on
+longshots nearly everywhere. Adding a relative-edge filter on top does **not**
+fix this — it makes it marginally worse (mean odds rose 5.28 → 5.67), because
+once a 0.05 absolute edge is required a longshot at p=0.10 clears a 20% relative
+bar automatically, so the relative test only bites favourites. Both variants are
+reported side by side. The deeper point: no selection rule rescues a model less
+accurate than the market. That is why the threshold sweep is in the deliverable.
+
+**Statistical honesty in the backtest.** Confidence intervals are not decoration
+here. A thousand-odd flagged bets at mean odds near 6 produce enormously noisy
+ROI — the sweep's best point estimate is +0.03%, with a 95% interval of
+[−14.9%, +15.5%] on 1,319 bets and negative results at neighbouring thresholds.
+Reporting that number without its interval would be noise-mining. Every economic
+figure carries a bootstrap CI.
 
 ---
 
-## Known limitations
+## 3. Containerization and deployment
 
-- **2020-21 is a genuine distribution shift.** Home-win rate fell to 39.8% from
-  44–45% either side — the COVID empty-stadium season. It is the worst fold for
-  every configuration, and no amount of tuning fixes that honestly.
-- **CLV is not a clean bet-at-open simulation.** Value is flagged against the
-  closing-derived market probability, then CLV asks whether the opening price on
-  that selection was better. It answers "does the model pick sides the market
-  later moves toward", which is real evidence, but the flag itself used closing
-  information.
-- **Rolling windows span seasons**, so a promoted club carries no top-flight
-  history and is dropped by the `min_prior_matches` filter until it has one.
-- **Understat is scraped**, not served through a documented API, and it has
-  already changed shape once during this project (the fixture list moved from an
-  inlined `datesData` blob to an AJAX endpoint). It could change again.
-
-## Serving and operations
+`docker compose up --build` starts the API, the dashboard and the MLflow UI (see
+[section 4 of the reproduction guide](#4-serve-the-api-and-dashboards) for ports
+and direct-run alternatives). The design principles behind that service:
 
 ### The model is swappable by design
 
-Nothing downstream names an algorithm. `src/train.py` registers the best
-configuration — currently `market_aware / catboost_tuned`, registry version 5,
-`model_semver` 1.0.1, selected by **walk-forward** mean log loss without scoring
-the holdout — to the MLflow Model Registry as `beating-1x2` with a `@champion`
-alias. The sealed test season is first scored later through the deployed API. A
-`model_contract.json` artifact travels with the model carrying its feature list
-and exact design-matrix column order.
-
-The API, the batch scorer, and the dashboard all resolve
-`models:/beating-1x2@champion`. Replacing the model is a re-registration plus a
-restart; no serving code changes. `reports/champion.json` records which
-configuration won and by how much, so promotion is auditable.
+Nothing downstream names an algorithm. The API, the batch scorer, and the
+dashboard all resolve `models:/beating-1x2@champion`. Replacing the model is a
+re-registration plus a restart; no serving code changes. `GET /health` reports
+the loaded model version, its SemVer and the `@champion` alias, so what is
+actually serving is always visible.
 
 ### Training and serving share one feature code path
 
@@ -407,25 +638,7 @@ The integration is best-effort throughout: short timeouts, every failure
 downgraded to "no price found", and a measured hit rate written to
 `reports/prediction_market_coverage.json` rather than an assumed one.
 
-### Running the service
-
-```bash
-docker compose up --build
-```
-
-API docs at `http://localhost:8000/docs`, dashboard at `http://localhost:8501`,
-MLflow at `http://localhost:5001`. The MLflow service publishes container port
-5000 as host 5001 because macOS Control Center (AirPlay Receiver) holds 5000 and
-silently shadows the UI.
-
-Or run them directly:
-
-```bash
-uvicorn src.api:app --reload
-```
-```bash
-streamlit run dashboard/app.py
-```
+### The API
 
 | endpoint | purpose |
 |---|---|
@@ -437,70 +650,26 @@ streamlit run dashboard/app.py
 | `GET /metrics` | request counters |
 
 Between late May and mid-August `/predict/upcoming` returns an empty list. That
-is correct: the top-5 leagues are not playing. It is reported as
-`n_fixtures: 0` with an explanatory note, not as an error.
+is correct: the top-5 leagues are not playing. It is reported as `n_fixtures: 0`
+with an explanatory note, not as an error.
 
-### Orchestration: what DVC does and what Prefect does
+---
 
-A fair criticism of the original proposal was that it named two things that look
-like orchestrators. They do different jobs:
-
-- **DVC** (`dvc.yaml`) is the build system. It declares each stage's inputs and
-  outputs so `dvc repro` rebuilds only what changed — editing a model
-  hyperparameter reruns training and evaluation, but not the hour of ingestion
-  above it. Run `dvc dag` to see the graph.
-- **Prefect** (`flows.py`) is the scheduler and runtime. It handles retries
-  against flaky third-party sources, concurrency, and run observability. The
-  three ingestion tasks run concurrently with retries; everything downstream is
-  sequential.
-
-Both shell out to `python -m src.<stage>`, so activate the virtualenv first --
-see [Running it](#running-it) for what happens when you do not.
-
-```bash
-dvc repro
-```
-
-The six committed hyperparameter-search tables are audited training inputs and
-are reused by default (`train.reuse_search_results: true`). Set that parameter
-to `false` when intentionally rerunning the full Optuna search; the selected
-parameters are still evaluated solely on walk-forward folds.
-
-```bash
-python flows.py            # full pipeline
-```
-```bash
-python flows.py --scoring  # just refresh and score fixtures
-```
-
-Generated artifacts are pushed to the DVC remote declared in `.dvc/config`, so a
-fresh clone can recover the exact data a run produced instead of rebuilding it:
-
-```bash
-dvc push
-```
-```bash
-dvc pull
-```
-
-Note that `train` is not idempotent by design. It refuses to register a second
-registry version under a `model_semver` that is already claimed, so re-running a
-completed pipeline unchanged fails at that stage -- deliberately, since an
-identical model is not a new release. Bump `model_semver` in `params.yaml` when
-you intend one.
+## 4. Production monitoring and drift simulation
 
 ### Drift monitoring
 
-`src/drift.py` tracks three things, and computes the statistics directly so the
-dashboard has numbers regardless of Evidently's version; Evidently HTML reports
-are generated additionally.
+`src/drift.py` tracks feature, target and calibration drift, computing the
+statistics directly so the dashboard has numbers regardless of Evidently's
+version; Evidently HTML reports (one per season, 2020–2025) are generated
+additionally.
 
 The reference window is **2018-19 and 2019-20 only** — deliberately stopping
 before 2020-21. A reference window has to predate the shift you want to detect,
 and folding the COVID season into the baseline would make it undetectable by
 construction. With the window set correctly, 2020-21 flags as target drift at
-p < 0.0001: home-win rate fell to 39.8% from 44–45% either side, matches having
-been played in empty stadiums. It is also the worst fold for every model
+**p < 0.0001**: home-win rate fell to 39.8% from 44–45% either side, matches
+having been played in empty stadiums. It is also the worst fold for every model
 configuration. That is a real detected shift, not injected synthetic noise.
 
 Feature drift is judged across **54 monitored features** at KS α = 0.01 and
@@ -510,19 +679,23 @@ churn rather than a structural break.
 
 Calibration decay is tracked as the **gap to the market**, not raw log loss: a
 season where everyone scored worse was a hard season; a season where only we
-scored worse is model decay. The worst gap is +0.095 (market_blind / logistic,
-2020-21), the same COVID season that trips the target-drift alarm.
+scored worse is model decay. The worst gap is **+0.095** (market_blind /
+logistic, 2020-21), the same COVID season that trips the target-drift alarm.
+
+### Baseline validation
+
+Before any fault is injected, `src/stress_test.py` scores the clean **2025-26
+holdout (1,727 rows)** through the deployed API (`API_URL`, defaulting to
+localhost) and validates it against the monitoring baseline: 0.9853 log loss
+against the market's 0.9784, a **+0.0069 gap**. It fails closed if the service is
+unavailable. Only after that baseline passes does it re-score corrupted copies.
+An explicit `--in-process` mode exists only for tests and local diagnostics.
 
 ### Drift stress test
 
-`src/drift.py` detects a *real* historical shift. `src/stress_test.py` does the
-complementary thing: it validates a serving baseline, then injects **known
-faults** and confirms the monitor catches each. It first scores the clean
-2025-26 holdout (1,727 rows) through the deployed API (`API_URL`, defaulting to
-localhost), posting 0.9853 log loss against the market's 0.9784 (a +0.0069 gap),
-and fails closed if the service is unavailable. Only after that baseline passes
-does it re-score three corrupted copies. An explicit `--in-process` mode exists
-only for tests and local diagnostics:
+`src/drift.py` detects a *real* historical shift; `src/stress_test.py` does the
+complementary thing — it injects **known faults** and confirms the monitor
+catches each:
 
 | Fault | Corruption | Caught by |
 |---|---|---|
@@ -532,18 +705,29 @@ only for tests and local diagnostics:
 
 Each fault trips a *different* detector, which is the point: marginal input-drift
 monitoring alone would miss the column swap, and performance monitoring alone
-would miss the schema break. Outputs land in `reports/drift/stress_test.{json,csv}`
-plus a self-contained `stress_test.html` report (and `stress_test.png`), rendered
-interactively in the dashboard's **Stress test** tab.
+would miss the schema break. The batch validation suite combines every signal
+before declaring a pass.
 
 ```bash
 python -m src.stress_test --api-url http://localhost:8000
 ```
 
-### Tests and CI
+Outputs land in `reports/drift/stress_test.{json,csv}` plus a self-contained
+`stress_test.html` report (and `stress_test.png`).
 
-98 hermetic tests, no network — they run on synthetic frames so an outage
-at any data source can never redden the build.
+### The monitoring dashboard
+
+`dashboard/app.py` (Streamlit, `http://localhost:8501`) renders the model
+summary, the seasonal drift metrics, the Evidently reports, and a **Stress test**
+tab that shows each injected fault and the detector that caught it — the visual
+evidence of the monitoring system responding to corrupted data.
+
+---
+
+## Testing and continuous integration
+
+98 hermetic tests, no network — they run on synthetic frames so an outage at any
+data source can never redden the build.
 
 The leakage tests are the centrepiece, and they are themselves verified by
 mutation: CI changes `shift(1)` to `shift(0)` in the feature code and **fails the
@@ -557,16 +741,44 @@ pytest
 ruff check .
 ```
 
-## Still not done
+---
 
-Hosted deployment (the container runs locally by design), and a scheduled
-Prefect deployment against a Prefect server rather than ad-hoc flow runs.
+## Limitations and honest caveats
 
-MLflow's registry still assigns integer versions, while the release identifier
-`model_semver` is validated from `params.yaml`, stored in the model contract and
-registry tags, and returned by every model-bearing API response.
+- **2020-21 is a genuine distribution shift.** Home-win rate fell to 39.8% from
+  44–45% either side — the COVID empty-stadium season. It is the worst fold for
+  every configuration, and no amount of tuning fixes that honestly.
+- **CLV is not a clean bet-at-open simulation.** Value is flagged against the
+  closing-derived market probability, then CLV asks whether the opening price on
+  that selection was better. It answers "does the model pick sides the market
+  later moves toward", which is real evidence, but the flag itself used closing
+  information.
+- **Longshot bias.** At a 0.05 absolute edge the rule flags 74–89% of fixtures at
+  mean odds above 4.7, and no selection rule rescues a model less sharp than the
+  market.
+- **Rolling windows span seasons**, so a promoted club carries no top-flight
+  history and is dropped by the `min_prior_matches` filter until it has one.
+- **Understat is scraped**, not served through a documented API, and it has
+  already changed shape once during this project (the fixture list moved from an
+  inlined `datesData` blob to an AJAX endpoint). It could change again.
 
-## Responsible use
+---
+
+## Roadmap
+
+- Hosted deployment (the container runs locally by design), and a scheduled
+  Prefect deployment against a Prefect server rather than ad-hoc flow runs.
+- Automated release promotion and SemVer bumps from CI.
+- Prediction-market prices (Kalshi, Polymarket) as a live model input.
+- Historical injury data, if a reliable free feed becomes available.
+- Training on more data as further seasons complete.
+
+---
+
+## Presentation and responsible use
+
+- **Slides:** `beating-the-ops.pptx` — the final presentation deck.
+- **Repository:** [github.com/arenmizuno/beating-1X2](https://github.com/arenmizuno/beating-1X2)
 
 Coursework for UChicago ADSP 32021, for academic purposes only. Nothing here is
 betting advice, and the results specifically indicate no exploitable edge. Data
